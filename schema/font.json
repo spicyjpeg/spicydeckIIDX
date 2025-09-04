@@ -1,0 +1,108 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id":     "schema/font.json",
+
+	"title": "Font metrics",
+	"type":  "object",
+
+	"required": [
+		"spaceWidth",
+		"tabWidth",
+		"lineHeight",
+		"baselineOffset",
+		"characterSizes"
+	],
+
+	"properties":  {
+		"spaceWidth": {
+			"title":       "Space width",
+			"description": "Width of the space character in pixels.",
+			"type":        "integer",
+
+			"minimum":   0,
+			"maximum": 255
+		},
+		"tabWidth": {
+			"title":       "Tab width",
+			"description": "Width of the tab character in pixels.",
+			"type":        "integer",
+
+			"minimum":   0,
+			"maximum": 255
+		},
+		"lineHeight": {
+			"title":       "Line height",
+			"description": "Height of each line in pixels, including any padding. Characters whose height is lower than this value will be aligned to the top of the line by default.",
+			"type":        "integer",
+
+			"minimum":   0,
+			"maximum": 255
+		},
+		"baselineOffset": {
+			"title":       "Baseline offset",
+			"description": "Offset to add to the Y coordinate of each line. Can be negative.",
+			"type":        "integer",
+
+			"minimum": -128,
+			"maximum":  127
+		},
+
+		"characterSizes": {
+			"title":       "Character list",
+			"description": "List of all glyphs in the font texture. Each entry's key must be a string containing a printable Unicode character. Only single-code-point characters are supported.",
+			"type":        "object",
+
+			"additionalProperties": false,
+
+			"patternProperties": {
+				"^[^\\u0000-\\u001f]$": {
+					"title": "Character metrics",
+					"type":  "object",
+
+					"required": [
+						"x",
+						"y",
+						"width",
+						"height"
+					],
+					"additionalProperties": false,
+
+					"properties": {
+						"x": {
+							"title":       "X offset",
+							"description": "X coordinate of the glyph's top left corner within the font texture.",
+							"type":        "integer",
+
+							"minimum":   0,
+							"maximum": 255
+						},
+						"y": {
+							"title":       "Y offset",
+							"description": "Y coordinate of the glyph's top left corner within the font texture.",
+							"type":        "integer",
+
+							"minimum":   0,
+							"maximum": 255
+						},
+						"width": {
+							"title":       "Character width",
+							"description": "Width of the glyph in pixels.",
+							"type":        "integer",
+
+							"minimum":   0,
+							"maximum": 127
+						},
+						"height": {
+							"title":       "Character height",
+							"description": "Height of the glyph in pixels.",
+							"type":        "integer",
+
+							"minimum":   0,
+							"maximum": 127
+						}
+					}
+				}
+			}
+		}
+	}
+}

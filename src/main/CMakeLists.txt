@@ -1,0 +1,42 @@
+
+cmake_minimum_required(VERSION 3.30)
+
+idf_component_register(
+	SRCS
+		drivers/audio.cpp
+		drivers/display.cpp
+		drivers/input.cpp
+		drivers/motor.cpp
+		drivers/storage.cpp
+		dsp/adpcm.cpp
+		dsp/dsp.cpp
+		renderer/font.cpp
+		renderer/renderer.cpp
+		util/hash.cpp
+		util/string.cpp
+		audiotask.cpp
+		iotask.cpp
+		main.cpp
+		sst.cpp
+		taskbase.cpp
+		uitask.cpp
+	INCLUDE_DIRS
+		../..
+	PRIV_REQUIRES
+		esp_driver_gpio
+		esp_driver_i2c
+		esp_driver_i2s
+		esp_driver_ledc
+		esp_driver_mcpwm
+		esp_driver_pcnt
+		esp_driver_sdmmc
+		esp_driver_spi
+		esp_timer
+		fatfs
+		freertos
+		log
+		nvs_flash
+		vfs
+	REQUIRED_IDF_TARGETS
+		esp32
+)

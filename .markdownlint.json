@@ -1,0 +1,11 @@
+{
+	"line-length": {
+		"tables": false
+	},
+
+	"emphasis-style":       false,
+	"fenced-code-language": false,
+	"first-line-heading":   false,
+	"no-inline-html":       false,
+	"no-hard-tabs":         false
+}
