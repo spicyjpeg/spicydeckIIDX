@@ -18,15 +18,19 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "src/main/util/string.hpp"
-#include "src/main/util/templates.hpp"
+#include "src/main/defs.hpp"
 
 namespace util {
 
 /* String manipulation */
 
-const char HEX_CHARSET[]{ "0123456789ABCDEF" };
+DRAM_ATTR const char HEX_CHARSET[]{ "0123456789ABCDEF" };
 
-size_t hexValueToString(char *output, uint32_t value, size_t numDigits) {
+IRAM_ATTR size_t hexValueToString(
+	char     *output,
+	uint32_t value,
+	size_t   numDigits
+) {
 	output += numDigits;
 	*output = 0;
 
@@ -70,7 +74,7 @@ size_t hexToString(
 #define L8(length)  L4(length), L4(length)
 #define L16(length) L8(length), L8(length)
 
-static const uint8_t _START_BYTE_LENGTHS[]{
+DRAM_ATTR static const uint8_t _START_BYTE_LENGTHS[]{
 	L16(1), // 0xxxx--- (1 byte)
 	L8 (0), // 10xxx--- (invalid)
 	L4 (2), // 110xx--- (2 bytes)
@@ -79,7 +83,7 @@ static const uint8_t _START_BYTE_LENGTHS[]{
 	L1 (0)  // 11111--- (invalid)
 };
 
-static const uint8_t _START_BYTE_MASKS[]{
+DRAM_ATTR static const uint8_t _START_BYTE_MASKS[]{
 	0x00,
 	0x7f, // 0xxxxxxx (1 byte)
 	0x1f, // 110xxxxx (2 bytes)
@@ -87,7 +91,7 @@ static const uint8_t _START_BYTE_MASKS[]{
 	0x07  // 11110xxx (4 bytes)
 };
 
-UTF8Character parseUTF8Character(const char *ch) {
+IRAM_ATTR UTF8Character parseUTF8Character(const char *ch) {
 	auto start  = uint8_t(*(ch++));
 	auto length = _START_BYTE_LENGTHS[start >> 3];
 	auto mask   = _START_BYTE_MASKS[length];
@@ -102,7 +106,7 @@ UTF8Character parseUTF8Character(const char *ch) {
 	return { codePoint, length };
 }
 
-size_t getUTF8StringLength(const char *str) {
+IRAM_ATTR size_t getUTF8StringLength(const char *str) {
 	for (size_t length = 0;; length++) {
 		auto value = parseUTF8Character(str);
 
@@ -120,7 +124,7 @@ size_t getUTF8StringLength(const char *str) {
 
 /* LZ4 decompressor */
 
-void decompressLZ4(
+IRAM_ATTR void decompressLZ4(
 	uint8_t       *output,
 	const uint8_t *input,
 	size_t        maxOutputLength,

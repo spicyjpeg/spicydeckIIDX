@@ -19,12 +19,13 @@
 #include <string.h>
 #include "src/main/util/hash.hpp"
 #include "src/main/util/templates.hpp"
+#include "src/main/defs.hpp"
 
 namespace util {
 
 /* String hashing (http://www.cse.yorku.ca/~oz/hash.html) */
 
-Hash hash(const char *str, char terminator, Hash value) {
+IRAM_ATTR Hash hash(const char *str, char terminator, Hash value) {
 	auto _str = reinterpret_cast<const uint8_t *>(str);
 
 	while (*_str && (*_str != terminator))
@@ -33,7 +34,7 @@ Hash hash(const char *str, char terminator, Hash value) {
 	return value;
 }
 
-Hash hash(const uint8_t *data, size_t length, Hash value) {
+IRAM_ATTR Hash hash(const uint8_t *data, size_t length, Hash value) {
 	for (; length > 0; length--)
 		value = Hash(*(data++)) + (value << 6) + (value << 16) - value;
 

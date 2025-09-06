@@ -4,7 +4,7 @@
 from libc.stddef cimport size_t
 from libc.stdint cimport int16_t, uint8_t
 
-cdef extern from "main/dsp/adpcm.hpp" namespace "dsp":
+cdef extern from "src/main/dsp/adpcm.hpp" namespace "dsp":
 	# 12-byte .sst ADPCM encoder and decoder
 
 	cdef struct SSTBlock:

@@ -214,18 +214,18 @@ IRAM_ATTR void Sampler::process(
 
 	const int numChunks = reader.getHeader()->numChunks;
 
-	int currentChunk = offset / (SAMPLE_OFFSET_UNIT * SAMPLES_PER_SECTOR);
-	int currentSector;
+	int cachedChunk = offset / (SAMPLE_OFFSET_UNIT * SAMPLES_PER_SECTOR);
+	int cacheEntry;
 
 	// Ensure a decoded copy of the first sector going to be sampled is in the
 	// cache.
-	if (currentChunk == cache_[0].chunk) {
-		currentSector = 0;
-	} else if (currentChunk == cache_[1].chunk) {
-		currentSector = 1;
-	} else if (currentChunk < numChunks) {
-		reader.read(cache_[0].samples[0], currentChunk);
-		currentSector = 0;
+	if (cachedChunk == cache_[0].chunk) {
+		cacheEntry = 0;
+	} else if (cachedChunk == cache_[1].chunk) {
+		cacheEntry = 1;
+	} else if (cachedChunk < numChunks) {
+		reader.read(cache_[0].samples[0], cachedChunk);
+		cacheEntry = 0;
 	}
 
 	for (; numSamples > 0; numSamples--) {
@@ -253,23 +253,23 @@ IRAM_ATTR void Sampler::process(
 			for (int i = 0; i < NUM_CHANNELS; i++)
 				output[i] = 0;
 		} else {
-			auto &sector     = cache_[currentSector];
-			auto &nextSector = cache_[currentSector ^ 1];
+			auto &sector     = cache_[cacheEntry];
+			auto &nextSector = cache_[cacheEntry ^ 1];
 
 			DecodedSector *sector1, *sector2;
 
-			if (chunk2 == currentChunk) {
+			if (chunk2 == cachedChunk) {
 				sector1 = &sector;
 				sector2 = &sector;
 			} else {
-				sector1 = (chunk1 == currentChunk) ? &sector : &nextSector;
+				sector1 = (chunk1 == cachedChunk) ? &sector : &nextSector;
 				sector2 = &nextSector;
 
 				if (nextSector.chunk != chunk2)
 					reader.read(nextSector.samples[0], chunk2);
 
-				currentChunk   = chunk2;
-				currentSector ^= 1;
+				cachedChunk = chunk2;
+				cacheEntry ^= 1;
 			}
 
 			for (int i = 0; i < NUM_CHANNELS; i++)

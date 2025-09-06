@@ -157,7 +157,7 @@ static constexpr uint8_t MATRIX_COLUMNS_[NUM_MATRIX_COLUMNS]{
 static constexpr uint8_t MATRIX_ROW_MASK_    =
 	util::reduceOR(MATRIX_ROWS_,    NUM_MATRIX_ROWS);
 static constexpr uint8_t MATRIX_COLUMN_MASK_ =
-util::reduceOR(MATRIX_COLUMNS_, NUM_MATRIX_COLUMNS);
+	util::reduceOR(MATRIX_COLUMNS_, NUM_MATRIX_COLUMNS);
 
 ButtonMatrix buttonMatrix;
 

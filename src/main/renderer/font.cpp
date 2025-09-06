@@ -72,7 +72,7 @@ cleanup:
 	return false;
 }
 
-const SFTEntry *Font::get_(util::UTF8CodePoint ch) const {
+IRAM_ATTR const SFTEntry *Font::get_(util::UTF8CodePoint ch) const {
 	auto header = as<SFTHeader>();
 	auto entry  = util::getHashTableEntry(
 		reinterpret_cast<const SFTEntry *>(&header[1]),
@@ -88,7 +88,7 @@ const SFTEntry *Font::get_(util::UTF8CodePoint ch) const {
 		return nullptr;
 }
 
-void Font::draw(
+IRAM_ATTR void Font::draw(
 	Renderer   &renderer,
 	int        x,
 	int        y,
@@ -187,7 +187,7 @@ void Font::draw(
 	}
 }
 
-int Font::getCharacterWidth(util::UTF8CodePoint ch) const {
+IRAM_ATTR int Font::getCharacterWidth(util::UTF8CodePoint ch) const {
 	switch (ch) {
 		case 0:
 		case '\n':
@@ -207,7 +207,7 @@ int Font::getCharacterWidth(util::UTF8CodePoint ch) const {
 	}
 }
 
-int Font::getStringWidth(const char *str, bool breakOnSpace) const {
+IRAM_ATTR int Font::getStringWidth(const char *str, bool breakOnSpace) const {
 	if (!str)
 		return 0;
 

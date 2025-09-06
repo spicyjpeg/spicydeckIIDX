@@ -53,7 +53,7 @@ private:
 		int          filterIndex,
 		size_t       inputStride = 1
 	);
-	uint64_t tryEncodeBlock_(
+	int64_t tryEncodeBlock_(
 		SSTChunk<1>  &output,
 		const Sample *input,
 		int          gain,

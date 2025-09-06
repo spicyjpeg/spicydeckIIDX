@@ -24,7 +24,43 @@ BLOCKS_PER_SECTOR:  int = 21
 SAMPLES_PER_SECTOR: int = 22 * BLOCKS_PER_SECTOR
 
 class VariantEncoder:
+	def __init__(self):
+		self._encoders: list[SSTEncoder] = [
+			SSTEncoder() for _ in range(NUM_CHANNELS)
+		]
+		self._buffered: ndarray = \
+			numpy.empty(( NUM_CHANNELS, 0 ), numpy.float32)
+
+	def _encode(self, samples: ndarray) -> bytes:
+		samples           = (samples * 32768.0).clip(-32768.0, 32767.0)
+		sector: bytearray = bytearray()
+
+		for channel, encoder in zip(samples, self._encoders):
+			sector += encoder.encode(channel.astype(numpy.int16))
+
+		return bytes(sector)
+
+	def feed(
+		self,
+		samples: ndarray[Any, dtype[numpy.float32]],
+		final:   bool = False
+	):
+		self._buffered = numpy.c_[self._buffered, samples]
+
+	def encodeSector(self) -> bytes:
+		samples: ndarray = self._buffered[:, 0:SAMPLES_PER_SECTOR]
+		self._buffered   = self._buffered[:, SAMPLES_PER_SECTOR:]
+
+		return self._encode(samples)
+
+	@property
+	def availableSectors(self) -> int:
+		return self._buffered.shape[1] // SAMPLES_PER_SECTOR
+
+class PitchShiftedVariantEncoder(VariantEncoder):
 	def __init__(self, sampleRate: int, pitchOffset: float):
+		super().__init__()
+
 		self._shifter: PitchShifter = PitchShifter(
 			sampleRate,
 			NUM_CHANNELS,
@@ -32,9 +68,6 @@ class VariantEncoder:
 			2.0 ** (pitchOffset / 12.0),
 			0x4000
 		)
-		self._encoders: list[SSTEncoder] = [
-			SSTEncoder() for _ in range(NUM_CHANNELS)
-		]
 
 	def feed(
 		self,
@@ -44,18 +77,7 @@ class VariantEncoder:
 		self._shifter.feed(samples, final)
 
 	def encodeSector(self) -> bytes:
-		# FIXME: the ADPCM encoder seems to glitch out when encoding peaks that
-		# are too close to INT16_MIN/INT16_MAX, so the amplitude is slightly
-		# reduced here as a workaround.
-		samples: ndarray = self._shifter.retrieve(SAMPLES_PER_SECTOR)
-		samples          = samples.clip(-1.0, 1.0) * (32767.0 - 64.0)
-
-		sector: bytearray = bytearray()
-
-		for channel, encoder in zip(samples, self._encoders):
-			sector += encoder.encode(channel.astype(numpy.int16))
-
-		return bytes(sector)
+		return self._encode(self._shifter.retrieve(SAMPLES_PER_SECTOR))
 
 	@property
 	def availableSectors(self) -> int:
@@ -73,9 +95,18 @@ class Encoder:
 			sampleRate,
 			NUM_CHANNELS
 		)
-		self._variants: list[VariantEncoder] = [
-			VariantEncoder(sampleRate, pitch) for pitch in pitchOffsets
-		]
+		self._variants: list[VariantEncoder] = []
+
+		for pitch in pitchOffsets:
+			if (pitch > -0.01) and (pitch < 0.01):
+				encoder: VariantEncoder = VariantEncoder()
+			else:
+				encoder: VariantEncoder = PitchShiftedVariantEncoder(
+					sampleRate,
+					pitch
+				)
+
+			self._variants.append(encoder)
 
 		self.chunksEncoded: int = 0
 

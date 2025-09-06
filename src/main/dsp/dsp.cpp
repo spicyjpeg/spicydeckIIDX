@@ -37,12 +37,14 @@ IRAM_ATTR float PIDController::update(float error, float dt) {
 
 /* Gain control */
 
-static constexpr int GAIN_UNIT_ = 1 << 14;
+static constexpr int GAIN_BITS_ = 14;
+static constexpr int GAIN_UNIT_ = 1 << GAIN_BITS_;
 
 IRAM_ATTR void Gain::configure(float gain) {
 	gain = util::clamp(gain, 0.0f, 1.0f);
+	gain = sinf(gain * (float(M_PI) / 2.0f));
 
-	gain_ = int32_t(float(GAIN_UNIT_) * sinf(gain * (float(M_PI) / 2.0f)));
+	gain_ = int32_t(float(GAIN_UNIT_) * gain + 0.5f);
 }
 
 IRAM_ATTR void Gain::process(
@@ -56,7 +58,8 @@ IRAM_ATTR void Gain::process(
 
 	for (; numSamples > 0; numSamples--) {
 		int mixed = gain * int(*input);
-		mixed    /= GAIN_UNIT_;
+		mixed    += GAIN_UNIT_ / 2;
+		mixed   >>= GAIN_BITS_;
 
 		*output = Sample(clampSample_(mixed));
 		output += outputStride;
@@ -66,10 +69,12 @@ IRAM_ATTR void Gain::process(
 
 IRAM_ATTR void Mixer::configure(float gain1, float gain2) {
 	gain1 = util::clamp(gain1, 0.0f, 1.0f);
+	gain1 = sinf(gain1 * (float(M_PI) / 2.0f));
 	gain2 = util::clamp(gain2, 0.0f, 1.0f);
+	gain2 = sinf(gain2 * (float(M_PI) / 2.0f));
 
-	a1_ = int32_t(float(GAIN_UNIT_) * sinf(gain1 * (float(M_PI) / 2.0f)));
-	a2_ = int32_t(float(GAIN_UNIT_) * sinf(gain2 * (float(M_PI) / 2.0f)));
+	a1_ = int32_t(float(GAIN_UNIT_) * gain1 + 0.5f);
+	a2_ = int32_t(float(GAIN_UNIT_) * gain2 + 0.5f);
 }
 
 IRAM_ATTR void Mixer::process(
@@ -85,7 +90,8 @@ IRAM_ATTR void Mixer::process(
 	for (; numSamples > 0; numSamples--) {
 		int mixed = a1 * int(*input1);
 		mixed    += a2 * int(*input2);
-		mixed    /= GAIN_UNIT_;
+		mixed    += GAIN_UNIT_ / 2;
+		mixed   >>= GAIN_BITS_;
 
 		*output = Sample(clampSample_(mixed));
 		output += outputStride;
@@ -96,12 +102,12 @@ IRAM_ATTR void Mixer::process(
 
 /* Simple bitcrusher */
 
-static constexpr int BITCRUSHER_UNIT_ = 1 << 16;
+static constexpr int BITCRUSHER_STEP_UNIT_ = 1 << 16;
 
 IRAM_ATTR void Bitcrusher::configure(float ratio) {
 	ratio = util::clamp(ratio, 0.001f, 1.0f);
 
-	step_ = uint32_t(float(BITCRUSHER_UNIT_) / ratio);
+	step_ = uint32_t(float(BITCRUSHER_STEP_UNIT_) / ratio + 0.5f);
 }
 
 IRAM_ATTR void Bitcrusher::reset(void) {
@@ -136,7 +142,8 @@ IRAM_ATTR void Bitcrusher::process(
 
 /* Biquad filter */
 
-static constexpr int FILTER_UNIT_ = 1 << 14;
+static constexpr int FILTER_BITS_ = 14;
+static constexpr int FILTER_UNIT_ = 1 << FILTER_BITS_;
 
 IRAM_ATTR void BiquadFilter::configure(
 	BiquadFilterType type,
@@ -198,11 +205,11 @@ IRAM_ATTR void BiquadFilter::configure(
 			assert(false);
 	}
 
-	a1_ = int32_t(float(FILTER_UNIT_) * a1 / a0);
-	a2_ = int32_t(float(FILTER_UNIT_) * a2 / a0);
-	b0_ = int32_t(float(FILTER_UNIT_) * b0 / a0);
-	b1_ = int32_t(float(FILTER_UNIT_) * b1 / a0);
-	b2_ = int32_t(float(FILTER_UNIT_) * b2 / a0);
+	a1_ = int32_t(float(FILTER_UNIT_) * a1 / a0 + 0.5f);
+	a2_ = int32_t(float(FILTER_UNIT_) * a2 / a0 + 0.5f);
+	b0_ = int32_t(float(FILTER_UNIT_) * b0 / a0 + 0.5f);
+	b1_ = int32_t(float(FILTER_UNIT_) * b1 / a0 + 0.5f);
+	b2_ = int32_t(float(FILTER_UNIT_) * b2 / a0 + 0.5f);
 }
 
 IRAM_ATTR void BiquadFilter::configurePeaking(
@@ -225,11 +232,11 @@ IRAM_ATTR void BiquadFilter::configurePeaking(
 	const float b1 = -2.0f * cosOmega;
 	const float b2 =  1.0f - (alpha * amp);
 
-	a1_ = int32_t(float(FILTER_UNIT_) * a1 / a0);
-	a2_ = int32_t(float(FILTER_UNIT_) * a2 / a0);
-	b0_ = int32_t(float(FILTER_UNIT_) * b0 / a0);
-	b1_ = int32_t(float(FILTER_UNIT_) * b1 / a0);
-	b2_ = int32_t(float(FILTER_UNIT_) * b2 / a0);
+	a1_ = int32_t(float(FILTER_UNIT_) * a1 / a0 + 0.5f);
+	a2_ = int32_t(float(FILTER_UNIT_) * a2 / a0 + 0.5f);
+	b0_ = int32_t(float(FILTER_UNIT_) * b0 / a0 + 0.5f);
+	b1_ = int32_t(float(FILTER_UNIT_) * b1 / a0 + 0.5f);
+	b2_ = int32_t(float(FILTER_UNIT_) * b2 / a0 + 0.5f);
 }
 
 IRAM_ATTR void BiquadFilter::reset(void) {
@@ -260,7 +267,8 @@ IRAM_ATTR void BiquadFilter::process(
 		filtered    += b2 * sb2;
 		filtered    -= a1 * sa1;
 		filtered    -= a2 * sa2;
-		filtered    /= FILTER_UNIT_;
+		filtered    += FILTER_UNIT_ / 2;
+		filtered   >>= FILTER_BITS_;
 
 		*output = Sample(clampSample_(filtered));
 		output += outputStride;

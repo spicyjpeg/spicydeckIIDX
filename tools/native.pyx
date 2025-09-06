@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # distutils: extra_compile_args=[ -O3, -std=gnu++20 ]
-# distutils: include_dirs=../src
+# distutils: include_dirs=..
 # distutils: language=c++
 # distutils: libraries=[ keyfinder, rubberband ]
 # distutils: sources=../src/main/dsp/adpcm.cpp
@@ -31,8 +31,8 @@ cdef class SSTEncoder:
 		if not samples.shape[0]:
 			return bytearray()
 
-		cdef size_t numBlocks = \
-			(samples.shape[0] + SST_SAMPLES_PER_BLOCK - 1) // SST_SAMPLES_PER_BLOCK
+		cdef size_t numBlocks = samples.shape[0] + SST_SAMPLES_PER_BLOCK - 1
+		numBlocks           //= SST_SAMPLES_PER_BLOCK
 		chunk                 = \
 			bytearray(sizeof(SSTChunkBase) + numBlocks * sizeof(SSTBlock))
 

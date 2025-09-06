@@ -33,7 +33,7 @@ DRAM_ATTR static const int16_t ADPCM_FILTER_COEFFS_[][2]{
 };
 
 static constexpr int ADPCM_FILTER_BITS_ = 8;
-static constexpr int ADPCM_FILTER_UNIT_ = 1 << ADPCM_FILTER_BITS_;
+static constexpr int ADPCM_FILTER_BIAS_ = 1 << (ADPCM_FILTER_BITS_ - 1);
 
 [[gnu::always_inline]] static inline int clampSample_(int value) {
 	return util::clamp(value, INT16_MIN, INT16_MAX);
@@ -65,11 +65,11 @@ IRAM_ATTR int SSTEncoder::estimateBlockGain_(
 		const int sample = *input;
 		input           += inputStride;
 
-		int encoded = sample * ADPCM_FILTER_UNIT_;
+		int encoded = sample << ADPCM_FILTER_BITS_;
 		encoded    -= a1 * s1;
 		encoded    -= a2 * s2;
-		encoded    -= ADPCM_FILTER_UNIT_ / 2;
-		encoded    /= ADPCM_FILTER_UNIT_;
+		encoded    -= ADPCM_FILTER_BIAS_;
+		encoded   >>= ADPCM_FILTER_BITS_;
 
 		if (encoded > posPeak)
 			posPeak = encoded;
@@ -77,7 +77,7 @@ IRAM_ATTR int SSTEncoder::estimateBlockGain_(
 			negPeak = encoded;
 
 		s2 = s1;
-		s1 = sample;
+		s1 = encoded;
 	}
 
 	int shift = 0;
@@ -90,7 +90,7 @@ IRAM_ATTR int SSTEncoder::estimateBlockGain_(
 	return util::clamp(shift, 1, 11);
 }
 
-IRAM_ATTR uint64_t SSTEncoder::tryEncodeBlock_(
+IRAM_ATTR int64_t SSTEncoder::tryEncodeBlock_(
 	SSTChunk<1>  &output,
 	const Sample *input,
 	int          gain,
@@ -107,7 +107,7 @@ IRAM_ATTR uint64_t SSTEncoder::tryEncodeBlock_(
 	int       s1 = s1_,       s2 = s2_;
 
 	const int actualGain = gain + ADPCM_FILTER_BITS_;
-	uint64_t  totalError = 0;
+	int64_t   totalError = 0;
 
 	for (int i = SST_SAMPLES_PER_BLOCK; i > 0; i--) {
 		const int sample = *input;
@@ -117,10 +117,11 @@ IRAM_ATTR uint64_t SSTEncoder::tryEncodeBlock_(
 		// reverse.
 		int residual = a1 * s1;
 		residual    += a2 * s2;
-		residual    += ADPCM_FILTER_UNIT_ / 2;
+		residual    += ADPCM_FILTER_BIAS_;
 
-		int encoded = sample * ADPCM_FILTER_UNIT_;
+		int encoded = sample << ADPCM_FILTER_BITS_;
 		encoded    -= residual;
+		encoded    += 1 << (actualGain - 1);
 		encoded   >>= actualGain;
 		encoded     = util::clamp(encoded, -8, 7);
 
@@ -132,11 +133,11 @@ IRAM_ATTR uint64_t SSTEncoder::tryEncodeBlock_(
 		// Simulate the sample being decoded back in order to measure the error.
 		int decoded = encoded << actualGain;
 		decoded    += residual;
-		decoded    /= ADPCM_FILTER_UNIT_;
+		decoded   >>= ADPCM_FILTER_BITS_;
 		decoded     = clampSample_(decoded);
 
-		int error   = sample - decoded;
-		totalError += error * error;
+		int64_t error = sample - decoded;
+		totalError   += error * error;
 
 		s2 = s1;
 		s1 = decoded;
@@ -156,8 +157,8 @@ IRAM_ATTR void SSTEncoder::encodeBlock_(
 	// find the one that produces the lowest noise floor.
 	SSTChunk<1> encodes[util::countOf(ADPCM_FILTER_COEFFS_)][3];
 
-	uint64_t bestError  = UINT64_MAX;
-	auto     bestEncode = &encodes[0][0];
+	int64_t bestError  = INT64_MAX;
+	auto    bestEncode = &encodes[0][0];
 
 	for (size_t i = 0; i < util::countOf(ADPCM_FILTER_COEFFS_); i++) {
 		const int gainOffset = estimateBlockGain_(input, i, inputStride);
@@ -206,7 +207,7 @@ IRAM_ATTR size_t SSTEncoder::encode(
 	output.s2 = s2_;
 
 	while (numSamples > 0) {
-		// Pad the last block to 28 samples.
+		// Pad the last block to 22 samples.
 		if (numSamples < SST_SAMPLES_PER_BLOCK) {
 			Sample buffer[SST_SAMPLES_PER_BLOCK]{ 0 };
 			auto   ptr = buffer;
@@ -257,8 +258,8 @@ IRAM_ATTR size_t decodeSST(
 			int sample1 = nibble1 << gain;
 			sample1    += a1 * s1;
 			sample1    += a2 * s2;
-			sample1    += ADPCM_FILTER_UNIT_ / 2;
-			sample1    /= ADPCM_FILTER_UNIT_;
+			sample1    += ADPCM_FILTER_BIAS_;
+			sample1   >>= ADPCM_FILTER_BITS_;
 			sample1     = clampSample_(sample1);
 
 			*output = Sample(sample1);
@@ -270,8 +271,8 @@ IRAM_ATTR size_t decodeSST(
 			int sample2 = nibble2 << gain;
 			sample2    += a1 * s1;
 			sample2    += a2 * s2;
-			sample2    += ADPCM_FILTER_UNIT_ / 2;
-			sample2    /= ADPCM_FILTER_UNIT_;
+			sample2    += ADPCM_FILTER_BIAS_;
+			sample2   >>= ADPCM_FILTER_BITS_;
 			sample2     = clampSample_(sample2);
 
 			*output = Sample(sample2);
@@ -327,8 +328,8 @@ IRAM_ATTR size_t BRRDecoder::decode(
 			int sample1 = nibble1 << gain;
 			sample1    += a1 * s1;
 			sample1    += a2 * s2;
-			sample1    += ADPCM_FILTER_UNIT_ / 2;
-			sample1    /= ADPCM_FILTER_UNIT_;
+			sample1    += ADPCM_FILTER_BIAS_;
+			sample1   >>= ADPCM_FILTER_BITS_;
 
 			*output = Sample(clampSample_(sample1));
 			output += outputStride;
@@ -339,8 +340,8 @@ IRAM_ATTR size_t BRRDecoder::decode(
 			int sample2 = nibble2 << gain;
 			sample2    += a1 * s1;
 			sample2    += a2 * s2;
-			sample2    += ADPCM_FILTER_UNIT_ / 2;
-			sample2    /= ADPCM_FILTER_UNIT_;
+			sample2    += ADPCM_FILTER_BIAS_;
+			sample2   >>= ADPCM_FILTER_BITS_;
 
 			*output = Sample(clampSample_(sample2));
 			output += outputStride;
