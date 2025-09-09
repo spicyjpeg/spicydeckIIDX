@@ -8,12 +8,23 @@
 
 /* Color palette */
 
-enum UIColor : renderer::Color {
-	UI_COLOR_BACKGROUND = renderer::rgb( 16,  16,  6),
+enum UIColor : renderer::RGB888 {
+	UI_COLOR_BACKGROUND = renderer::rgb( 16,  16,  16),
+	UI_COLOR_ACCENT1    = renderer::rgb(240, 208,  80),
+	UI_COLOR_ACCENT2    = renderer::rgb(160, 136,  48),
+	UI_COLOR_WINDOW1    = renderer::rgb( 80,  80,  80),
+	UI_COLOR_WINDOW2    = renderer::rgb( 36,  36,  36),
+	UI_COLOR_WINDOW3    = renderer::rgb(  8,   8,   8),
+	UI_COLOR_HIGHLIGHT1 = renderer::rgb(200, 176,  64),
+	UI_COLOR_HIGHLIGHT2 = renderer::rgb(160, 136,  48),
+	UI_COLOR_PROGRESS1  = renderer::rgb( 72, 192,  16),
+	UI_COLOR_PROGRESS2  = renderer::rgb( 32, 120,   0),
+	UI_COLOR_BOX1       = renderer::rgb(  0,   0,   0),
+	UI_COLOR_BOX2       = renderer::rgb( 40,  40,  40),
+	UI_COLOR_TEXT1      = renderer::rgb(224, 224, 224),
+	UI_COLOR_TEXT2      = renderer::rgb(112, 112, 112),
 	UI_COLOR_TITLE      = renderer::rgb(255, 255, 255),
-	UI_COLOR_TEXT       = renderer::rgb(200, 200, 200),
-	UI_COLOR_STATUS     = renderer::rgb(160, 160, 160),
-	UI_COLOR_ERROR      = renderer::rgb(255,  48,  32)
+	UI_COLOR_SUBTITLE   = renderer::rgb(255, 240, 128)
 };
 
 /* Screen classes */

@@ -33,7 +33,7 @@ static void showErrorScreen(const char *text) {
 		DISPLAY_WIDTH - (8 * 2),
 		16,
 		"Error",
-		UI_COLOR_ERROR
+		UI_COLOR_TITLE
 	);
 	font.draw(
 		gfx,
@@ -42,7 +42,7 @@ static void showErrorScreen(const char *text) {
 		DISPLAY_WIDTH  - (8 * 2),
 		DISPLAY_HEIGHT - (8 * 2 + 16),
 		text,
-		UI_COLOR_TEXT,
+		UI_COLOR_TEXT1,
 		true
 	);
 

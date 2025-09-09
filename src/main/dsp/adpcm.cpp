@@ -107,6 +107,7 @@ IRAM_ATTR int64_t SSTEncoder::tryEncodeBlock_(
 	int       s1 = s1_,       s2 = s2_;
 
 	const int actualGain = gain + ADPCM_FILTER_BITS_;
+	int       lastNibble = 0;
 	int64_t   totalError = 0;
 
 	for (int i = SST_SAMPLES_PER_BLOCK; i > 0; i--) {
@@ -125,10 +126,12 @@ IRAM_ATTR int64_t SSTEncoder::tryEncodeBlock_(
 		encoded   >>= actualGain;
 		encoded     = util::clamp(encoded, -8, 7);
 
+		const int nibble = encoded + 8;
+
 		if (!(i % 2))
-			*ptr      = uint8_t(encoded + 8);
+			lastNibble = nibble;
 		else
-			*(ptr++) |= uint8_t(encoded + 8) << 4;
+			*(ptr++)   = lastNibble | (nibble << 4);
 
 		// Simulate the sample being decoded back in order to measure the error.
 		int decoded = encoded << actualGain;
@@ -237,12 +240,13 @@ IRAM_ATTR size_t decodeSST(
 	size_t             numBlocks,
 	size_t             outputStride
 ) {
-	auto   block      = input.getBlocks();
-	size_t numSamples = 0;
+	const size_t numSamples = numBlocks * SST_SAMPLES_PER_BLOCK;
+
+	auto block = input.getBlocks();
 
 	int s1 = input.s1, s2 = input.s2;
 
-	for (; (numBlocks > 0) && !block->isTerminator(); numBlocks--) {
+	for (; numBlocks > 0; numBlocks--, block++) {
 		auto ptr    = block->samples;
 		auto filter = ADPCM_FILTER_COEFFS_[block->getFilterIndex()];
 
@@ -281,9 +285,6 @@ IRAM_ATTR size_t decodeSST(
 			s2 = s1;
 			s1 = sample2;
 		}
-
-		block++;
-		numSamples += SST_SAMPLES_PER_BLOCK;
 	}
 
 	return numSamples;

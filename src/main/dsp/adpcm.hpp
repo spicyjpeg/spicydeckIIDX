@@ -20,9 +20,6 @@ public:
 	inline int getFilterIndex(void) const {
 		return header >> 4;
 	}
-	inline bool isTerminator(void) const {
-		return header == 0xff;
-	}
 };
 
 class [[gnu::packed]] SSTChunkBase {
@@ -46,7 +43,7 @@ static constexpr size_t SST_SAMPLES_PER_BLOCK = sizeof(SSTBlock::samples) * 2;
 
 class SSTEncoder {
 private:
-	int16_t s1_, s2_;
+	Sample s1_, s2_;
 
 	int estimateBlockGain_(
 		const Sample *input,

@@ -26,10 +26,10 @@ enum SSTKeyScale : uint8_t {
 	SCALE_MINOR   = 2
 };
 
-struct [[gnu::packed]] SSTHeader {
+struct [[gnu::packed]] SSTHeaderInfo {
 public:
 	uint32_t magic;
-	uint32_t sampleRate, numChunks;
+	uint32_t sampleRate, numChunks, waveformLength;
 	uint8_t  numVariants, numChannels;
 
 	uint8_t titleOffset, artistOffset, albumOffset, genreOffset;
@@ -38,29 +38,33 @@ public:
 	SSTKeyScale keyScale;
 	uint8_t     keyNote;
 	int16_t     pitchOffsets[SST_MAX_VARIANTS];
+};
 
-	char strings[456];
+union [[gnu::packed]] SSTHeader {
+public:
+	SSTHeaderInfo info;
+	char          strings[512];
 
 	inline bool validate(void) const {
 		return true
-			&& (magic       == "SST1"_c)
-			&& (sampleRate  >= 8000)
-			&& (sampleRate  <= 192000)
-			&& (numVariants >= 1)
-			&& (numVariants <= SST_MAX_VARIANTS)
-			&& (numChannels == NUM_CHANNELS);
+			&& (info.magic       == "SST1"_c)
+			&& (info.sampleRate  >= 8000)
+			&& (info.sampleRate  <= 192000)
+			&& (info.numVariants >= 1)
+			&& (info.numVariants <= SST_MAX_VARIANTS)
+			&& (info.numChannels == NUM_CHANNELS);
 	}
 	inline const char *getTitle(void) const {
-		return &strings[titleOffset * 2];
+		return &strings[info.titleOffset * 2];
 	}
 	inline const char *getArtist(void) const {
-		return &strings[artistOffset * 2];
+		return &strings[info.artistOffset * 2];
 	}
 	inline const char *getAlbum(void) const {
-		return &strings[albumOffset * 2];
+		return &strings[info.albumOffset * 2];
 	}
 	inline const char *getGenre(void) const {
-		return &strings[genreOffset * 2];
+		return &strings[info.genreOffset * 2];
 	}
 };
 
@@ -104,7 +108,7 @@ private:
 	FILE    *file_;
 	uint8_t variant_, evictionMode_;
 
-	util::Data cache_;
+	util::Data cache_, waveform_;
 	SSTHeader  header_;
 
 	SSTSector *cacheSector_(uint32_t chunk);

@@ -122,12 +122,19 @@ IRAM_ATTR void Bitcrusher::process(
 	size_t       outputStride,
 	size_t       inputStride
 ) {
+	const int step = step_;
+
 	int    accumulator = accumulator_;
 	Sample lastSample  = lastSample_;
 
 	for (; numSamples > 0; numSamples--) {
-		if (accumulator >= step_) {
-			accumulator -= step_;
+		// The bitcrusher simulates nearest-neighbor resampling using a DDA-like
+		// error diffusion algorithm to determine when to update the currently
+		// held sample.
+		accumulator += BITCRUSHER_STEP_UNIT_;
+
+		if (accumulator >= step) {
+			accumulator -= step;
 			lastSample   = *input;
 		}
 
@@ -203,6 +210,7 @@ IRAM_ATTR void BiquadFilter::configure(
 
 		default:
 			assert(false);
+			return;
 	}
 
 	a1_ = int32_t(float(FILTER_UNIT_) * a1 / a0 + 0.5f);
@@ -284,6 +292,65 @@ IRAM_ATTR void BiquadFilter::process(
 	sa2_ = int32_t(sa2);
 	sb1_ = int32_t(sb1);
 	sb2_ = int32_t(sb2);
+}
+
+/* 4-bit waveform data generator */
+
+void WaveformEncoder::reset(void) {
+	accumulator_ = 0;
+	currentPeak_ = 0;
+	lastNibble_  = -1;
+}
+
+size_t WaveformEncoder::encode(
+	uint8_t      *output,
+	const Sample *input,
+	int          sampleRate,
+	size_t       numSamples,
+	size_t       inputStride
+) {
+	size_t numNibbles = 0;
+
+	int accumulator = accumulator_;
+	int currentPeak = currentPeak_;
+	int lastNibble  = lastNibble_;
+
+	for (; numSamples > 0; numSamples--) {
+		// Dither the block size (i.e. how many input samples are used to
+		// compute each waveform sample) over time. This is the same DDA
+		// algorithm used in the bitcrusher.
+		accumulator += WAVEFORM_SAMPLE_RATE;
+
+		if (accumulator >= sampleRate) {
+			accumulator -= sampleRate;
+			numNibbles++;
+
+			const int nibble = (currentPeak * WAVEFORM_RANGE) >> 15;
+			currentPeak      = 0;
+
+			if (lastNibble < 0) {
+				lastNibble  = nibble;
+			} else {
+				lastNibble  = -1;
+				*(output++) = lastNibble | (nibble << 4);
+			}
+		}
+
+		// Find the peak in each block.
+		int sample = *input;
+		input     += inputStride;
+
+		if (sample < 0)
+			sample = -sample;
+		if (sample > currentPeak)
+			currentPeak = sample;
+	}
+
+	accumulator_ = accumulator;
+	currentPeak_ = Sample(currentPeak);
+	lastNibble_  = int8_t(lastNibble);
+
+	return numNibbles;
 }
 
 }

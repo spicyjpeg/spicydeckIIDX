@@ -9,134 +9,12 @@ from io              import SEEK_SET
 from multiprocessing import Pool
 from pathlib         import Path
 from struct          import Struct
-from typing          import Any, BinaryIO
 
-import av, numpy
+import av
+from audio        import NUM_CHANNELS, EncodingPipeline
 from av.container import InputContainer
-from native       import KeyFinder, PitchShifter, SSTEncoder
-from numpy        import dtype, ndarray
-from util         import StringBlobBuilder, findFilesWithExtensions, setupLogger
-
-## Pitch shifting and .sst ADPCM encoding
-
-NUM_CHANNELS:       int = 2
-BLOCKS_PER_SECTOR:  int = 21
-SAMPLES_PER_SECTOR: int = 22 * BLOCKS_PER_SECTOR
-
-class VariantEncoder:
-	def __init__(self):
-		self._encoders: list[SSTEncoder] = [
-			SSTEncoder() for _ in range(NUM_CHANNELS)
-		]
-		self._buffered: ndarray = \
-			numpy.empty(( NUM_CHANNELS, 0 ), numpy.float32)
-
-	def _encode(self, samples: ndarray) -> bytes:
-		samples           = (samples * 32768.0).clip(-32768.0, 32767.0)
-		sector: bytearray = bytearray()
-
-		for channel, encoder in zip(samples, self._encoders):
-			sector += encoder.encode(channel.astype(numpy.int16))
-
-		return bytes(sector)
-
-	def feed(
-		self,
-		samples: ndarray[Any, dtype[numpy.float32]],
-		final:   bool = False
-	):
-		self._buffered = numpy.c_[self._buffered, samples]
-
-	def encodeSector(self) -> bytes:
-		samples: ndarray = self._buffered[:, 0:SAMPLES_PER_SECTOR]
-		self._buffered   = self._buffered[:, SAMPLES_PER_SECTOR:]
-
-		return self._encode(samples)
-
-	@property
-	def availableSectors(self) -> int:
-		return self._buffered.shape[1] // SAMPLES_PER_SECTOR
-
-class PitchShiftedVariantEncoder(VariantEncoder):
-	def __init__(self, sampleRate: int, pitchOffset: float):
-		super().__init__()
-
-		self._shifter: PitchShifter = PitchShifter(
-			sampleRate,
-			NUM_CHANNELS,
-			1.0,
-			2.0 ** (pitchOffset / 12.0),
-			0x4000
-		)
-
-	def feed(
-		self,
-		samples: ndarray[Any, dtype[numpy.float32]],
-		final:   bool = False
-	):
-		self._shifter.feed(samples, final)
-
-	def encodeSector(self) -> bytes:
-		return self._encode(self._shifter.retrieve(SAMPLES_PER_SECTOR))
-
-	@property
-	def availableSectors(self) -> int:
-		return self._shifter.availableSamples // SAMPLES_PER_SECTOR
-
-class Encoder:
-	def __init__(self, sampleRate: int, pitchOffsets: Iterable[float]):
-		self._resampler: av.AudioResampler = av.AudioResampler(
-			"fltp",
-			"stereo",
-			sampleRate,
-			SAMPLES_PER_SECTOR
-		)
-		self._keyFinder: KeyFinder = KeyFinder(
-			sampleRate,
-			NUM_CHANNELS
-		)
-		self._variants: list[VariantEncoder] = []
-
-		for pitch in pitchOffsets:
-			if (pitch > -0.01) and (pitch < 0.01):
-				encoder: VariantEncoder = VariantEncoder()
-			else:
-				encoder: VariantEncoder = PitchShiftedVariantEncoder(
-					sampleRate,
-					pitch
-				)
-
-			self._variants.append(encoder)
-
-		self.chunksEncoded: int = 0
-
-	def feed(self, frame: av.AudioFrame | None):
-		newFrames: list[av.AudioFrame] = self._resampler.resample(frame)
-
-		for newFrame in newFrames:
-			samples: ndarray = newFrame.to_ndarray()
-			final:   bool    = (frame is None) and (newFrame is newFrames[-1])
-
-			self._keyFinder.feed(samples)
-
-			for variant in self._variants:
-				variant.feed(samples, final)
-
-	def flush(self, outputFile: BinaryIO):
-		while True:
-			# Keep flushing as long as at least one sector is available from
-			# each variant encoder.
-			for variant in self._variants:
-				if not variant.availableSectors:
-					return
-
-			for variant in self._variants:
-				outputFile.write(variant.encodeSector())
-
-			self.chunksEncoded += 1
-
-	def estimateKey(self) -> tuple[str | None, int]:
-		return self._keyFinder.estimateKey(True)
+from util         import \
+	StringBlobBuilder, findFilesWithExtensions, roundUpToMultiple, setupLogger
 
 ## .sst file header generation
 
@@ -145,9 +23,9 @@ class SSTKeyScale(IntEnum):
 	SCALE_MAJOR   = 1
 	SCALE_MINOR   = 2
 
-SST_HEADER_STRUCT:     Struct = Struct("< 4s 2I 12B 16h 456s")
+SST_HEADER_STRUCT:     Struct = Struct("< 4s 3I 12B 16h 452s")
 SST_MAX_VARIANTS:      int    = 16
-SST_MAX_BLOB_LENGTH:   int    = 456
+SST_MAX_BLOB_LENGTH:   int    = 452
 SST_PITCH_OFFSET_UNIT: int    = 1 << 4
 
 def normalizeMetadata(metadata: Mapping[str, str], defaultTitle: str = ""):
@@ -185,11 +63,12 @@ def normalizeMetadata(metadata: Mapping[str, str], defaultTitle: str = ""):
 	return normalized
 
 def generateSSTHeader(
-	metadata:     Mapping[str, str],
-	sampleRate:   int,
-	numChunks:    int,
-	pitchOffsets: Sequence[float],
-	key:          tuple[str | None, int] = ( None, 0 )
+	metadata:       Mapping[str, str],
+	sampleRate:     int,
+	numChunks:      int,
+	waveformLength: int,
+	pitchOffsets:   Sequence[float],
+	key:            tuple[str | None, int] = ( None, 0 )
 ) -> bytes:
 	blob: StringBlobBuilder = StringBlobBuilder(4)
 
@@ -217,6 +96,7 @@ def generateSSTHeader(
 		b"SST1",
 		sampleRate,
 		numChunks,
+		waveformLength,
 		len(pitchOffsets),
 		NUM_CHANNELS,
 		titleOffset  // 2,
@@ -232,6 +112,8 @@ def generateSSTHeader(
 		*pitchOffsetValues,
 		blob.data
 	)
+
+## .sst file encoding
 
 def encodeFile(
 	inputPath:    Path,
@@ -259,8 +141,8 @@ def encodeFile(
 		inputPath.stem
 	)
 
-	encoder:   Encoder = Encoder(sampleRate, pitchOffsets)
-	startTime: float   = time.time()
+	pipeline:  EncodingPipeline = EncodingPipeline(sampleRate, pitchOffsets)
+	startTime: float            = time.time()
 
 	with inputFile, open(outputPath, "wb") as outputFile:
 		# Use a placeholder for the header, then overwrite it with the actual
@@ -268,32 +150,38 @@ def encodeFile(
 		outputFile.write(bytes(SST_HEADER_STRUCT.size))
 
 		for frame in inputFile.decode(audio = 0):
-			encoder.feed(frame)
-			encoder.flush(outputFile)
+			pipeline.feed(frame)
+			pipeline.flush(outputFile)
 
-		encoder.feed(None)
-		encoder.flush(outputFile)
+		pipeline.feed(None)
+		pipeline.flush(outputFile)
+
+		waveformLength: int = len(pipeline.waveformData)
+		paddedLength:   int = roundUpToMultiple(waveformLength, 512)
+
+		outputFile.write(pipeline.waveformData.ljust(paddedLength, b"\0"))
 
 		outputFile.seek(0, SEEK_SET)
 		outputFile.write(generateSSTHeader(
 			metadata,
 			sampleRate,
-			encoder.chunksEncoded,
+			pipeline.chunksEncoded,
+			waveformLength * 2,
 			pitchOffsets,
-			encoder.estimateKey()
+			pipeline.estimateKey()
 		))
 
 	encodeTime: float = time.time() - startTime
 
 	logging.info(
 		f"converted {outputPath.name} ({encodeTime:.1f}s, "
-		f"{encoder.chunksEncoded / encodeTime:.1f} chunks/s)"
+		f"{pipeline.chunksEncoded / encodeTime:.1f} chunks/s)"
 	)
 
 ## Main
 
 DEFAULT_EXTENSIONS:    list[str]   = [ "wav", "flac", "mp3", "m4a", "ogg" ]
-DEFAULT_PITCH_OFFSETS: list[float] = [ -2.0, -1.0, 0.0, 1.0, 2.0 ]
+DEFAULT_PITCH_OFFSETS: list[float] = [ -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0 ]
 DEFAULT_SAMPLE_RATE:   int         = 44100
 
 def createParser() -> ArgumentParser:

@@ -71,7 +71,7 @@ void DeckAudio::updateMeasuredSpeed_(int16_t value, float dt) {
 	speed      /= DECK_TARGET_RPM / 60.0f;
 
 	// TODO: apply a filter here to stabilize playback speed
-	speed *= float(reader_.getHeader()->sampleRate);
+	speed *= float(reader_.getHeader()->info.sampleRate);
 	speed *= float(sst::SAMPLE_OFFSET_UNIT);
 	step_  = int(speed);
 
@@ -213,7 +213,8 @@ void AudioTask::handleDeckButtons_(
 	if (held & drivers::DECK_BTN_SHIFT) {
 		if (selector && (deck.flags_ & DECK_FLAG_READY)) {
 			const int variant    = deck.reader_.getVariant();
-			const int maxVariant = deck.reader_.getHeader()->numVariants - 1;
+			const int maxVariant =
+				deck.reader_.getHeader()->info.numVariants - 1;
 
 			if ((selector < 0) && (variant > 0))
 				deck.reader_.setVariant(variant - 1);

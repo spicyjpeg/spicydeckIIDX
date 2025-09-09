@@ -146,4 +146,30 @@ public:
 	);
 };
 
+/* 4-bit waveform data generator */
+
+static constexpr int     WAVEFORM_SAMPLE_RATE = 32;
+static constexpr uint8_t WAVEFORM_RANGE       = 12;
+
+class WaveformEncoder {
+private:
+	int    accumulator_;
+	Sample currentPeak_;
+	int8_t lastNibble_;
+
+public:
+	inline WaveformEncoder(void) {
+		reset();
+	}
+
+	void reset(void);
+	size_t encode(
+		uint8_t      *output,
+		const Sample *input,
+		int          sampleRate,
+		size_t       numSamples,
+		size_t       inputStride = 1
+	);
+};
+
 }

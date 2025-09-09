@@ -52,14 +52,12 @@ SSTSector *Reader::cacheSector_(uint32_t chunk) {
 	}
 
 	// Read the sector into the chosen entry.
-	uint32_t offset = (chunk * header_.numVariants) + variant_;
-	offset         *= sizeof(SSTSector);
+	const uint32_t offset = (chunk * header_.info.numVariants) + variant_;
 
-	if (fseek(file_, sizeof(SSTHeader) + offset, SEEK_SET)) {
-		ESP_LOGE(TAG_, ".sst seek failed");
-		return nullptr;
-	}
-	if (!fread(&bestEntry->sector, sizeof(SSTSector), 1, file_)) {
+	if (
+		fseek(file_, sizeof(SSTHeader) + sizeof(SSTSector) * offset, SEEK_SET) ||
+		!fread(&bestEntry->sector, sizeof(SSTSector), 1, file_)
+	) {
 		ESP_LOGE(TAG_, ".sst read failed");
 		return nullptr;
 	}
@@ -81,25 +79,40 @@ bool Reader::open(const char *path) {
 	if (file_)
 		close();
 
+	uint32_t offset;
+
 	file_ = fopen(path, "rb");
 
 	if (!file_) {
 		ESP_LOGE(TAG_, "could not open .sst file: %s", path);
 		return false;
 	}
-	if (!fread(&header_, sizeof(SSTHeader), 1, file_)) {
-		ESP_LOGE(TAG_, "could not read .sst header: %s", path);
+	if (
+		!fread(&header_, sizeof(SSTHeader), 1, file_) ||
+		!header_.validate()
+	) {
+		ESP_LOGE(TAG_, "not a valid .sst file: %s", path);
 		goto cleanup;
 	}
-	if (!header_.validate()) {
-		ESP_LOGE(TAG_, "not a valid .sst file: %s", path);
+
+	// Preload the entire waveform (which is typically just a few kilobytes).
+	waveform_.allocate((header_.info.waveformLength + 1) / 2);
+	assert(waveform_.ptr);
+
+	offset = header_.info.numChunks * header_.info.numVariants;
+
+	if (
+		fseek(file_, sizeof(SSTHeader) + sizeof(SSTSector) * offset, SEEK_SET) ||
+		!fread(waveform_.ptr, waveform_.length, 1, file_)
+	) {
+		ESP_LOGE(TAG_, "could not load .sst waveform: %s", path);
 		goto cleanup;
 	}
 
 	// By default, use the first variant whose pitch offset is zero. This also
 	// flushes the sector cache.
-	for (int i = 0; i < header_.numVariants; i++) {
-		if (!header_.pitchOffsets[i]) {
+	for (int i = 0; i < header_.info.numVariants; i++) {
+		if (!header_.info.pitchOffsets[i]) {
 			variant_ = i;
 			break;
 		}
@@ -107,6 +120,7 @@ bool Reader::open(const char *path) {
 
 	// Fill up the cache with the first few sectors of the file.
 	cache_.allocate<SectorCache>();
+	assert(cache_.ptr);
 	flushCache_();
 
 	for (int i = 0; i < NUM_CACHE_ENTRIES; i++)
@@ -125,11 +139,12 @@ void Reader::close(void) {
 
 	fclose(file_);
 	cache_.destroy();
+	waveform_.destroy();
 	file_ = nullptr;
 }
 
 bool Reader::read(dsp::Sample *output, uint32_t chunk) {
-	assert(file_ && (chunk < header_.numChunks));
+	assert(file_ && (chunk < header_.info.numChunks));
 
 	// Check if the sector is cached.
 	auto      &set    = cache_.as<SectorCache>()->sets[chunk % NUM_CACHE_SETS];
@@ -159,14 +174,14 @@ bool Reader::read(dsp::Sample *output, uint32_t chunk) {
 size_t Reader::getKeyName(char *output) const {
 	assert(file_);
 
-	if (!header_.keyScale) {
+	if (!header_.info.keyScale) {
 		output[0] = '-';
 		output[1] = 0;
 		return 1;
 	}
 
-	int key = header_.keyNote * SST_PITCH_OFFSET_UNIT;
-	key    += header_.pitchOffsets[variant_];
+	int key = header_.info.keyNote * SST_PITCH_OFFSET_UNIT;
+	key    += header_.info.pitchOffsets[variant_];
 	key    += SST_PITCH_OFFSET_UNIT	* 12; // Workaround for % sign behavior
 	key    += SST_PITCH_OFFSET_UNIT / 2;
 	key    /= SST_PITCH_OFFSET_UNIT;
@@ -176,7 +191,7 @@ size_t Reader::getKeyName(char *output) const {
 
 	while (*source)
 		*(dest++) = *(source++);
-	if (header_.keyScale == SCALE_MINOR)
+	if (header_.info.keyScale == SCALE_MINOR)
 		*(dest++) = 'm';
 
 	*dest = 0;
@@ -206,13 +221,15 @@ IRAM_ATTR void Sampler::process(
 	int         step,
 	size_t      numSamples
 ) {
-	// Output silence if the playback rate is too slow.
-	if ((step > -STEP_THRESHOLD_) && (step < STEP_THRESHOLD_)) {
+	// Output silence if no file is loaded or the playback rate is too slow.
+	auto header = reader.getHeader();
+
+	if (!header || ((step > -STEP_THRESHOLD_) && (step < STEP_THRESHOLD_))) {
 		memset(output, 0, numSamples * sizeof(dsp::Sample) * NUM_CHANNELS);
 		return;
 	}
 
-	const int numChunks = reader.getHeader()->numChunks;
+	const int numChunks = header->info.numChunks;
 
 	int cachedChunk = offset / (SAMPLE_OFFSET_UNIT * SAMPLES_PER_SECTOR);
 	int cacheEntry;

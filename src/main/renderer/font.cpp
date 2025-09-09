@@ -92,10 +92,10 @@ IRAM_ATTR void Font::draw(
 	Renderer   &renderer,
 	int        x,
 	int        y,
-	int        width,
-	int        height,
+	int        w,
+	int        h,
 	const char *str,
-	Color      color,
+	RGB565     color,
 	bool       wordWrap
 ) const {
 	if (!str)
@@ -103,15 +103,15 @@ IRAM_ATTR void Font::draw(
 
 	auto header = as<SFTHeader>();
 
-	int currentX  = x;
-	int boundaryX = x + width;
-	int clipX1    = renderer.getClipX1();
-	int clipX2    = renderer.getClipX2();
+	int       currentX  = x;
+	const int boundaryX = x + w;
+	const int clipX1    = renderer.getClipX1();
+	const int clipX2    = renderer.getClipX2();
 
-	int currentY  = header->baselineOffset + y;
-	int boundaryY = header->baselineOffset + (y + height) - header->lineHeight;
-	int clipY1    = header->baselineOffset + renderer.getClipY1();
-	int clipY2    = header->baselineOffset + renderer.getClipY2();
+	int       currentY  = header->baselineOffset + y;
+	const int boundaryY = header->baselineOffset + (y + h) - header->lineHeight;
+	const int clipY1    = header->baselineOffset + renderer.getClipY1();
+	const int clipY2    = header->baselineOffset + renderer.getClipY2();
 
 	for (;;) {
 		auto ch   = util::parseUTF8Character(str);

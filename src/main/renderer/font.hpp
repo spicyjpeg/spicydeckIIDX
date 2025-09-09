@@ -58,18 +58,29 @@ public:
 	inline void release(void) {
 		destroy();
 	}
+	inline void draw(
+		Renderer   &renderer,
+		int        x,
+		int        y,
+		int        w,
+		int        h,
+		const char *str,
+		RGB888     color,
+		bool       wordWrap = false
+	) const {
+		draw(renderer, x, y, w, h, str, rgb888to565(color), wordWrap);
+	}
 
 	void initDefault(void);
 	bool initFromFile(const char *path);
-
 	void draw(
 		Renderer   &renderer,
 		int        x,
 		int        y,
-		int        width,
-		int        height,
+		int        w,
+		int        h,
 		const char *str,
-		Color      color,
+		RGB565     color,
 		bool       wordWrap = false
 	) const;
 	int getCharacterWidth(util::UTF8CodePoint ch) const;

@@ -3,7 +3,7 @@
 # distutils: include_dirs=..
 # distutils: language=c++
 # distutils: libraries=[ keyfinder, rubberband ]
-# distutils: sources=../src/main/dsp/adpcm.cpp
+# distutils: sources=[ ../src/main/dsp/adpcm.cpp, ../src/main/dsp/dsp.cpp ]
 # cython:    language_level=3
 
 from cython.operator cimport dereference
@@ -14,15 +14,16 @@ from libcpp          cimport bool
 import numpy
 from numpy import ndarray
 
-cimport adpcm, keyfinder
-from adpcm      cimport SST_SAMPLES_PER_BLOCK, SSTBlock, SSTChunkBase
+cimport dsp, keyfinder
+from dsp        cimport \
+	SST_SAMPLES_PER_BLOCK, WAVEFORM_SAMPLE_RATE, SSTBlock, SSTChunkBase
 from keyfinder  cimport key_t
 from rubberband cimport Option, RubberBandStretcher
 
 ## .sst ADPCM encoder/decoder bindings
 
 cdef class SSTEncoder:
-	cdef adpcm.SSTEncoder _encoder
+	cdef dsp.SSTEncoder _encoder
 
 	def reset(self):
 		self._encoder.reset()
@@ -31,7 +32,8 @@ cdef class SSTEncoder:
 		if not samples.shape[0]:
 			return bytearray()
 
-		cdef size_t numBlocks = samples.shape[0] + SST_SAMPLES_PER_BLOCK - 1
+		cdef size_t numBlocks = samples.shape[0]
+		numBlocks            += SST_SAMPLES_PER_BLOCK - 1
 		numBlocks           //= SST_SAMPLES_PER_BLOCK
 		chunk                 = \
 			bytearray(sizeof(SSTChunkBase) + numBlocks * sizeof(SSTBlock))
@@ -65,7 +67,7 @@ def decodeSST(const uint8_t[::1] chunk not None) -> ndarray:
 
 	cdef int16_t[::1] samplesView = samples
 
-	cdef size_t numDecoded = adpcm.decodeSST(
+	cdef size_t numDecoded = dsp.decodeSST(
 		&samplesView[0],
 		dereference(<const SSTChunkBase *> &chunk[0]),
 		numBlocks,
@@ -73,6 +75,39 @@ def decodeSST(const uint8_t[::1] chunk not None) -> ndarray:
 	)
 
 	return samples[0:numDecoded]
+
+## Waveform data generator bindings
+
+cdef class WaveformEncoder:
+	cdef dsp.WaveformEncoder _encoder
+
+	def reset(self):
+		self._encoder.reset()
+
+	def encode(
+		self,
+		const int16_t[::1] samples not None,
+		int                sampleRate
+	) -> bytearray:
+		if not samples.shape[0]:
+			return bytearray()
+
+		cdef size_t numNibbles = samples.shape[0] * sampleRate
+		numNibbles            += WAVEFORM_SAMPLE_RATE - 1
+		numNibbles           //= WAVEFORM_SAMPLE_RATE
+		chunk                  = bytearray((numNibbles + 1) // 2)
+
+		cdef uint8_t[::1] chunkView = chunk
+
+		cdef size_t numEncoded = self._encoder.encode(
+			&chunkView[0],
+			&samples[0],
+			sampleRate,
+			samples.shape[0],
+			1,
+		)
+
+		return chunk[0:(numEncoded + 1) // 2]
 
 ## KeyFinder bindings
 
