@@ -4,7 +4,9 @@
 #include "src/main/drivers/input.hpp"
 #include "src/main/renderer/font.hpp"
 #include "src/main/renderer/renderer.hpp"
-#include "src/main/taskbase.hpp"
+#include "src/main/util/rtos.hpp"
+
+namespace tasks {
 
 /* Color palette */
 
@@ -42,40 +44,44 @@ public:
 
 class MainScreen : public Screen {
 public:
-	void draw(UITask &task) const;
-	void update(UITask &task, const drivers::InputState &inputs);
+	void draw(UITask &task) const override;
+	void update(UITask &task, const drivers::InputState &inputs) override;
 };
 
 class LibraryScreen : public Screen {
 public:
-	void draw(UITask &task) const;
-	void update(UITask &task, const drivers::InputState &inputs);
+	void draw(UITask &task) const override;
+	void update(UITask &task, const drivers::InputState &inputs) override;
 };
 
 /* Main UI rendering task */
 
-static constexpr int UI_TASK_PERIOD = 20;
-
-class UITask : public Task {
+class UITask : public util::Task {
 	friend class MainScreen;
 	friend class LibraryScreen;
 
 private:
 	renderer::Renderer gfx_;
 	renderer::Font     font_;
-	Screen             *currentScreen_;
 
+	util::Queue<drivers::InputState> inputQueue_;
+
+	Screen        *currentScreen_;
 	MainScreen    mainScreen_;
 	LibraryScreen libraryScreen_;
 
 	inline UITask(void) :
-		Task("UITask", 0, configMAX_PRIORITIES - 10, UI_TASK_PERIOD)
+		Task("UITask", 0x1000)
 	{}
 
-	void mainInit_(void);
-	void mainLoop_(void);
-	void handleMessage_(const TaskMessage &message);
+	[[noreturn]] void taskMain_(void) override;
 
 public:
+	inline void updateInputs(const drivers::InputState &inputs) {
+		inputQueue_.push(inputs);
+	}
+
 	static UITask &instance(void);
 };
+
+}

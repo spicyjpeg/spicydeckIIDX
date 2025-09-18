@@ -309,7 +309,7 @@ size_t WaveformEncoder::encode(
 	size_t       numSamples,
 	size_t       inputStride
 ) {
-	size_t numNibbles = 0;
+	auto ptr = output;
 
 	int accumulator = accumulator_;
 	int currentPeak = currentPeak_;
@@ -323,16 +323,16 @@ size_t WaveformEncoder::encode(
 
 		if (accumulator >= sampleRate) {
 			accumulator -= sampleRate;
-			numNibbles++;
 
-			const int nibble = (currentPeak * WAVEFORM_RANGE) >> 15;
-			currentPeak      = 0;
+			int nibble  = (currentPeak * WAVEFORM_RANGE) >> 15;
+			nibble      = util::clamp(nibble, 0, WAVEFORM_RANGE - 1);
+			currentPeak = 0;
 
 			if (lastNibble < 0) {
-				lastNibble  = nibble;
+				lastNibble = nibble;
 			} else {
-				lastNibble  = -1;
-				*(output++) = lastNibble | (nibble << 4);
+				*(ptr++)   = lastNibble | (nibble << 4);
+				lastNibble = -1;
 			}
 		}
 
@@ -349,8 +349,7 @@ size_t WaveformEncoder::encode(
 	accumulator_ = accumulator;
 	currentPeak_ = Sample(currentPeak);
 	lastNibble_  = int8_t(lastNibble);
-
-	return numNibbles;
+	return ptr - output;
 }
 
 }

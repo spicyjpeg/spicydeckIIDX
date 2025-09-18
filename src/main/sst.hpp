@@ -11,7 +11,7 @@
 namespace sst {
 
 static constexpr size_t NUM_CHANNELS       = 2;
-static constexpr size_t BLOCKS_PER_SECTOR  = 21;
+static constexpr size_t BLOCKS_PER_SECTOR  = 85;
 static constexpr size_t SAMPLES_PER_SECTOR =
 	dsp::SST_SAMPLES_PER_BLOCK * BLOCKS_PER_SECTOR;
 
@@ -32,18 +32,17 @@ public:
 	uint32_t sampleRate, numChunks, waveformLength;
 	uint8_t  numVariants, numChannels;
 
-	uint8_t titleOffset, artistOffset, albumOffset, genreOffset;
-	uint8_t trackNumber, trackCount, discNumber, discCount;
+	uint8_t keyScale, keyNote;
+	int16_t pitchOffsets[SST_MAX_VARIANTS];
 
-	SSTKeyScale keyScale;
-	uint8_t     keyNote;
-	int16_t     pitchOffsets[SST_MAX_VARIANTS];
+	uint16_t titleOffset, artistOffset, albumOffset, genreOffset;
+	uint8_t  trackNumber, trackCount, discNumber, discCount;
 };
 
 union [[gnu::packed]] SSTHeader {
 public:
 	SSTHeaderInfo info;
-	char          strings[512];
+	char          strings[2048];
 
 	inline bool validate(void) const {
 		return true
@@ -55,16 +54,16 @@ public:
 			&& (info.numChannels == NUM_CHANNELS);
 	}
 	inline const char *getTitle(void) const {
-		return &strings[info.titleOffset * 2];
+		return &strings[info.titleOffset];
 	}
 	inline const char *getArtist(void) const {
-		return &strings[info.artistOffset * 2];
+		return &strings[info.artistOffset];
 	}
 	inline const char *getAlbum(void) const {
-		return &strings[info.albumOffset * 2];
+		return &strings[info.albumOffset];
 	}
 	inline const char *getGenre(void) const {
-		return &strings[info.genreOffset * 2];
+		return &strings[info.genreOffset];
 	}
 };
 
@@ -73,52 +72,20 @@ public:
 	dsp::SSTChunk<BLOCKS_PER_SECTOR> channels[NUM_CHANNELS];
 };
 
-/* .sst file reader and sector cache */
-
-// The sector cache emulates an 8-way set-associative cache, holding up to 128
-// sectors. The caches for both decks take up around 128 KB of RAM.
-static constexpr size_t NUM_CACHE_SETS    = 16;
-static constexpr size_t CACHE_SET_SIZE    = 8;
-static constexpr size_t NUM_CACHE_ENTRIES = NUM_CACHE_SETS * CACHE_SET_SIZE;
-
-enum EvictionMode {
-	// Evict sectors that are closest to the beginning of the file (i.e. the
-	// least recently played sectors during normal playback)
-	EVICT_LOWEST  = 0,
-	// Evict sectors that are closest to the end of the file (i.e. the least
-	// recently played sectors during reverse playback)
-	EVICT_HIGHEST = 1,
-	// Evict a randomly chosen sector
-	EVICT_RANDOM  = 2
-};
-
-struct CachedSector {
-public:
-	uint32_t  chunk;
-	SSTSector sector;
-};
-
-struct SectorCache {
-public:
-	CachedSector sets[NUM_CACHE_SETS][CACHE_SET_SIZE];
-};
+/* .sst file reader */
 
 class Reader {
 private:
-	FILE    *file_;
-	uint8_t variant_, evictionMode_;
+	FILE *file_;
+	int  currentVariant_;
 
-	util::Data cache_, waveform_;
 	SSTHeader  header_;
-
-	SSTSector *cacheSector_(uint32_t chunk);
-	void flushCache_(void);
+	util::Data waveform_;
 
 public:
 	inline Reader(void) :
 		file_(nullptr),
-		variant_(0),
-		evictionMode_(EVICT_LOWEST)
+		currentVariant_(0)
 	{}
 	inline ~Reader(void) {
 		close();
@@ -127,50 +94,64 @@ public:
 		return file_ ? &header_ : nullptr;
 	}
 	inline int getVariant(void) const {
-		return variant_;
+		return currentVariant_;
 	}
 	inline void setVariant(int variant) {
-		flushCache_();
-		variant_ = variant;
-	}
-	inline void setEvictionMode(EvictionMode mode) {
-		evictionMode_ = mode;
+		currentVariant_ = util::clamp(variant, 0, header_.info.numVariants - 1);
 	}
 
 	bool open(const char *path);
 	void close(void);
-	bool read(dsp::Sample *output, uint32_t chunk);
+	bool read(SSTSector &output, int chunk);
 
 	size_t getKeyName(char *output) const;
 };
 
 /* .sst sampler */
 
-static constexpr int SAMPLE_OFFSET_UNIT = 1 << 4;
+static constexpr int SAMPLE_OFFSET_BITS = 4;
+static constexpr int SAMPLE_OFFSET_UNIT = 1 << SAMPLE_OFFSET_BITS;
 
-struct DecodedSector {
+using ReadCallback     = const SSTSector *(*)(int chunk, void *arg);
+using ReadDoneCallback = void (*)(const SSTSector *sector, void *arg);
+
+struct SamplerCacheEntry {
 public:
-	uint32_t    chunk;
+	int         chunk;
 	dsp::Sample samples[SAMPLES_PER_SECTOR][NUM_CHANNELS];
 };
 
 class Sampler {
 private:
-	DecodedSector cache_[2];
+	SamplerCacheEntry cache_[2];
+	int               currentCacheEntry_;
+
+	ReadCallback     readCallback_;
+	ReadDoneCallback readDoneCallback_;
+	void             *arg_;
+
+	const SamplerCacheEntry *loadChunk_(int chunk);
 
 public:
-	inline Sampler(void) {
+	inline Sampler(void) :
+		readCallback_(nullptr),
+		readDoneCallback_(nullptr),
+		arg_(nullptr)
+	{
 		flush();
+	}
+	inline void setCallbacks(
+		ReadCallback     read,
+		ReadDoneCallback readDone = nullptr,
+		void             *arg     = nullptr
+	) {
+		readCallback_     = read;
+		readDoneCallback_ = readDone;
+		arg_              = arg;
 	}
 
 	void flush(void);
-	void process(
-		dsp::Sample *output,
-		Reader      &reader,
-		uint32_t    offset,
-		int         step,
-		size_t      numSamples
-	);
+	void process(dsp::Sample *output, int offset, int step, size_t numSamples);
 };
 
 }

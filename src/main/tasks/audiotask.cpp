@@ -1,50 +1,71 @@
 
+#include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "src/main/drivers/audio.hpp"
 #include "src/main/drivers/input.hpp"
 #include "src/main/drivers/inputdefs.hpp"
 #include "src/main/dsp/dsp.hpp"
+#include "src/main/tasks/audiotask.hpp"
+#include "src/main/tasks/iotask.hpp"
+#include "src/main/tasks/streamtask.hpp"
 #include "src/main/util/templates.hpp"
-#include "src/main/audiotask.hpp"
-#include "src/main/iotask.hpp"
 #include "src/main/sst.hpp"
-#include "src/main/taskbase.hpp"
+
+namespace tasks {
 
 /* Deck object */
 
+// Allocate ~96 KB per deck for the sector streaming FIFOs.
+static constexpr size_t NUM_QUEUED_SECTORS_ = 48;
 
-void DeckAudio::init_(void) {
+void AudioTaskDeck::init_(void) {
+	sampler_.setCallbacks(
+		[](int chunk, void *arg) -> const sst::SSTSector * {
+			auto deck = reinterpret_cast<AudioTaskDeck *>(arg);
+
+			// Consume all sectors in the queue prior to the requested one.
+			for (;;) {
+				auto entry = deck->sectorQueue_.popItem();
+
+				if (!entry) // Underrun
+					return nullptr;
+
+				if (entry->chunk == chunk)
+					return &(entry->sector);
+				else
+					deck->sectorQueue_.finalizePop();
+			}
+		},
+		[](const sst::SSTSector *sector, void *arg) {
+			auto deck = reinterpret_cast<AudioTaskDeck *>(arg);
+
+			deck->sectorQueue_.finalizePop();
+		},
+		this
+	);
+	filter_.reset();
+
+	bool ok = sectorQueue_.allocate(NUM_QUEUED_SECTORS_);
+	assert(ok);
+
+	sampleRate_ = 0;
+	flags_      = 0;
+
 	offset_    = 0;
 	cueOffset_ = 0;
-	loopStart_ = 0;
-	loopEnd_   = 0xffffffff;
+	loopStart_ = INT_MIN;
+	loopEnd_   = INT_MIN;
 	step_      = 0;
-
-	flags_ = 0;
-	filter_.reset();
 }
 
-void DeckAudio::process_(void) {
-	// Do nothing and output silence if the deck is not yet ready to play. This
-	// flag acts as a lock for the .sst reader; when cleared, a new file can be
-	// safely loaded (even by another task).
-	if (!(flags_ & DECK_FLAG_READY)) {
-		util::clear(buffer_);
-		return;
-	}
-
-	sampler_.process(
-		buffer_[0],
-		reader_,
-		offset_,
-		step_,
-		AUDIO_BUFFER_SIZE
-	);
+void AudioTaskDeck::process_(void) {
+	sampler_.process(audioBuffer_[0], offset_, step_, AUDIO_BUFFER_SIZE);
 
 	for (int i = 0; i < sst::NUM_CHANNELS; i++) {
 		filter_.process(
-			&buffer_[0][i],
-			&buffer_[0][i],
+			&audioBuffer_[0][i],
+			&audioBuffer_[0][i],
 			AUDIO_BUFFER_SIZE,
 			sst::NUM_CHANNELS,
 			sst::NUM_CHANNELS
@@ -65,24 +86,18 @@ void DeckAudio::process_(void) {
 	}
 }
 
-void DeckAudio::updateMeasuredSpeed_(int16_t value, float dt) {
+void AudioTaskDeck::updateMeasuredSpeed_(int16_t value, float dt) {
 	float speed = float(value) / dt;
 	speed      /= float(drivers::DECK_STEPS_PER_REV);
 	speed      /= DECK_TARGET_RPM / 60.0f;
 
 	// TODO: apply a filter here to stabilize playback speed
-	speed *= float(reader_.getHeader()->info.sampleRate);
+	speed *= float(sampleRate_);
 	speed *= float(sst::SAMPLE_OFFSET_UNIT);
 	step_  = int(speed);
-
-	// Adjust the cache eviction strategy depending on whether the track is
-	// being played in reverse.
-	reader_.setEvictionMode(
-		(value >= 0) ? sst::EVICT_LOWEST : sst::EVICT_HIGHEST
-	);
 }
 
-void DeckAudio::updateFilter_(uint8_t value) {
+void AudioTaskDeck::updateFilter_(uint8_t value) {
 	float                 cutoff = float(value) / 127.5f;
 	dsp::BiquadFilterType type;
 
@@ -98,65 +113,48 @@ void DeckAudio::updateFilter_(uint8_t value) {
 
 /* Main audio processing task */
 
-void AudioTask::mainInit_(void) {
+[[noreturn]] void AudioTask::taskMain_(void) {
+	auto &audioDriver = drivers::AudioDriver::instance();
+
 	for (auto &deck : decks_)
 		deck.init_();
-}
 
-void AudioTask::mainLoop_(void) {
-	auto &audio = drivers::AudioDriver::instance();
+	for (;;) {
+		drivers::InputState inputs;
 
-	for (auto &deck : decks_)
-		deck.process_();
+		while (inputQueue_.pop(inputs))
+			handleInputs_(inputs);
 
-	for (int i = 0; i < sst::NUM_CHANNELS; i++) {
-		mainMixer_.process(
-			&mainBuffer_[0][i],
-			&decks_[0].buffer_[0][i],
-			&decks_[1].buffer_[0][i],
-			AUDIO_BUFFER_SIZE,
-			sst::NUM_CHANNELS,
-			sst::NUM_CHANNELS
-		);
-		monitorMixer_.process(
-			&monitorBuffer_[0][i],
-			&decks_[0].buffer_[0][i],
-			&decks_[1].buffer_[0][i],
-			AUDIO_BUFFER_SIZE,
-			sst::NUM_CHANNELS,
-			sst::NUM_CHANNELS
-		);
-		bitcrusher_.process(
-			&mainBuffer_[0][i],
-			&mainBuffer_[0][i],
-			AUDIO_BUFFER_SIZE,
-			sst::NUM_CHANNELS,
-			sst::NUM_CHANNELS
-		);
-	}
+		for (auto &deck : decks_)
+			deck.process_();
 
-	// TODO: send deck state messages periodically here
-	audio.feed(mainBuffer_[0], monitorBuffer_[0], AUDIO_BUFFER_SIZE);
-}
+		for (int i = 0; i < sst::NUM_CHANNELS; i++) {
+			mainMixer_.process(
+				&mainBuffer_[0][i],
+				&decks_[0].audioBuffer_[0][i],
+				&decks_[1].audioBuffer_[0][i],
+				AUDIO_BUFFER_SIZE,
+				sst::NUM_CHANNELS,
+				sst::NUM_CHANNELS
+			);
+			monitorMixer_.process(
+				&monitorBuffer_[0][i],
+				&decks_[0].audioBuffer_[0][i],
+				&decks_[1].audioBuffer_[0][i],
+				AUDIO_BUFFER_SIZE,
+				sst::NUM_CHANNELS,
+				sst::NUM_CHANNELS
+			);
+			bitcrusher_.process(
+				&mainBuffer_[0][i],
+				&mainBuffer_[0][i],
+				AUDIO_BUFFER_SIZE,
+				sst::NUM_CHANNELS,
+				sst::NUM_CHANNELS
+			);
+		}
 
-void AudioTask::handleMessage_(const TaskMessage &message) {
-	switch (message.type) {
-		case MESSAGE_INPUTS:
-			handleInputs_(message.inputs);
-			break;
-
-		case MESSAGE_LOAD_START:
-			// Lock the deck while a new .sst file is being loaded into it by
-			// another task.
-			decks_[message.deck].flags_ &= ~DECK_FLAG_READY;
-			break;
-
-		case MESSAGE_LOAD_END:
-			decks_[message.deck].flags_ |= DECK_FLAG_READY;
-			break;
-
-		default:
-			break;
+		audioDriver.feed(mainBuffer_[0], monitorBuffer_[0], AUDIO_BUFFER_SIZE);
 	}
 }
 
@@ -211,16 +209,12 @@ void AudioTask::handleDeckButtons_(
 	auto &deck = decks_[index];
 
 	if (held & drivers::DECK_BTN_SHIFT) {
-		if (selector && (deck.flags_ & DECK_FLAG_READY)) {
-			const int variant    = deck.reader_.getVariant();
-			const int maxVariant =
-				deck.reader_.getHeader()->info.numVariants - 1;
+		auto &streamTask = StreamTask::instance();
 
-			if ((selector < 0) && (variant > 0))
-				deck.reader_.setVariant(variant - 1);
-			else if ((selector > 0) && (variant < maxVariant))
-				deck.reader_.setVariant(variant + 1);
-		}
+		if (selector < 0)
+			streamTask.issueCommand(index, STREAM_CMD_PREV_VARIANT);
+		else if (selector > 0)
+			streamTask.issueCommand(index, STREAM_CMD_NEXT_VARIANT);
 
 		if (pressed & drivers::DECK_BTN_RESTART)
 			deck.offset_ = 0;
@@ -243,19 +237,23 @@ void AudioTask::handleDeckButtons_(
 
 			// Move the entire loop when attempting to move the start point past
 			// the end.
-			if (deck.offset_ > deck.loopEnd_)
+			if ((deck.loopEnd_ >= 0) && (deck.loopEnd_ < deck.offset_))
 				deck.loopEnd_ = deck.offset_ + length;
 		}
 
 		if (pressed & drivers::DECK_BTN_LOOP_OUT) {
-			if (deck.offset_ > deck.loopStart_) {
+			if ((deck.loopStart_ >= 0) && (deck.offset_ > deck.loopStart_)) {
 				deck.loopEnd_ = deck.offset_;
 				deck.flags_  |= DECK_FLAG_LOOPING;
 			}
 		}
 
 		if (pressed & drivers::DECK_BTN_RELOOP) {
-			if (deck.loopEnd_ > deck.loopStart_)
+			if (
+				(deck.loopStart_ >= 0) &&
+				(deck.loopEnd_   >= 0) &&
+				(deck.loopEnd_ > deck.loopStart_)
+			)
 				deck.flags_ ^= DECK_FLAG_LOOPING;
 		}
 
@@ -278,4 +276,6 @@ AudioTask &AudioTask::instance(void) {
 	static AudioTask task;
 
 	return task;
+}
+
 }

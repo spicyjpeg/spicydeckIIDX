@@ -11,8 +11,6 @@
 
 static constexpr int DMA_CHANNEL_ = 0;
 
-static constexpr uint16_t CENTER_DEAD_ZONE_ = 16;
-
 AnalogInputs analogInputs;
 
 AnalogInputs::AnalogInputs(void) {
@@ -127,14 +125,7 @@ void AnalogInputs::getInputs(uint8_t *output) const {
 		: buffers_[0];
 
 	for (size_t i = defs::NUM_ANALOG_INPUTS; i > 0; i--) {
-		int value = source ? *(source++) : 512;
-
-		if (
-			(value >= (512 - CENTER_DEAD_ZONE_)) &&
-			(value <= (512 + CENTER_DEAD_ZONE_))
-		)
-			value = 512;
-
+		int value   = source ? *(source++) : 512;
 		value      *= 255;
 		*(output++) = (value + 511) / 1023;
 	}

@@ -23,9 +23,9 @@ class SSTKeyScale(IntEnum):
 	SCALE_MAJOR   = 1
 	SCALE_MINOR   = 2
 
-SST_HEADER_STRUCT:     Struct = Struct("< 4s 3I 12B 16h 452s")
+SST_HEADER_STRUCT:     Struct = Struct("< 4s 3I 4B 16h 4H 4B")
+SST_HEADER_LENGTH:     int    = 2048
 SST_MAX_VARIANTS:      int    = 16
-SST_MAX_BLOB_LENGTH:   int    = 452
 SST_PITCH_OFFSET_UNIT: int    = 1 << 4
 
 def normalizeMetadata(metadata: Mapping[str, str], defaultTitle: str = ""):
@@ -69,15 +69,15 @@ def generateSSTHeader(
 	waveformLength: int,
 	pitchOffsets:   Sequence[float],
 	key:            tuple[str | None, int] = ( None, 0 )
-) -> bytes:
-	blob: StringBlobBuilder = StringBlobBuilder(4)
+) -> bytearray:
+	blob: StringBlobBuilder = StringBlobBuilder()
 
 	titleOffset:  int = blob.addString(metadata.get("title",  ""))
 	artistOffset: int = blob.addString(metadata.get("artist", ""))
 	albumOffset:  int = blob.addString(metadata.get("album",  ""))
 	genreOffset:  int = blob.addString(metadata.get("genre",  ""))
 
-	if len(blob.data) > SST_MAX_BLOB_LENGTH:
+	if (SST_HEADER_STRUCT.size + len(blob.data)) > SST_HEADER_LENGTH:
 		raise RuntimeError("string blob too large for header")
 
 	keyScale, keyNote     = key
@@ -92,26 +92,29 @@ def generateSSTHeader(
 	for i, pitch in enumerate(pitchOffsets):
 		pitchOffsetValues[i] = round(pitch * SST_PITCH_OFFSET_UNIT)
 
-	return SST_HEADER_STRUCT.pack(
+	header: bytearray = bytearray()
+	header           += SST_HEADER_STRUCT.pack(
 		b"SST1",
 		sampleRate,
 		numChunks,
 		waveformLength,
 		len(pitchOffsets),
 		NUM_CHANNELS,
-		titleOffset  // 2,
-		artistOffset // 2,
-		albumOffset  // 2,
-		genreOffset  // 2,
-		int(metadata.get("track",       "1")),
-		int(metadata.get("totaltracks", "1")),
-		int(metadata.get("disc",        "1")),
-		int(metadata.get("totaldiscs",  "1")),
 		keyScale,
 		keyNote,
 		*pitchOffsetValues,
-		blob.data
+		SST_HEADER_STRUCT.size + titleOffset,
+		SST_HEADER_STRUCT.size + artistOffset,
+		SST_HEADER_STRUCT.size + albumOffset,
+		SST_HEADER_STRUCT.size + genreOffset,
+		int(metadata.get("track",       "1")),
+		int(metadata.get("totaltracks", "1")),
+		int(metadata.get("disc",        "1")),
+		int(metadata.get("totaldiscs",  "1"))
 	)
+	header           += blob.data
+
+	return header.ljust(SST_HEADER_LENGTH, b"\0")
 
 ## .sst file encoding
 
@@ -141,13 +144,15 @@ def encodeFile(
 		inputPath.stem
 	)
 
-	pipeline:  EncodingPipeline = EncodingPipeline(sampleRate, pitchOffsets)
-	startTime: float            = time.time()
+	pipeline: EncodingPipeline = EncodingPipeline(sampleRate, pitchOffsets)
+
+	startTime: float = time.time()
+	duration:  float = inputFile.duration / 1000000
 
 	with inputFile, open(outputPath, "wb") as outputFile:
 		# Use a placeholder for the header, then overwrite it with the actual
 		# header once the file has been encoded.
-		outputFile.write(bytes(SST_HEADER_STRUCT.size))
+		outputFile.write(bytes(SST_HEADER_LENGTH))
 
 		for frame in inputFile.decode(audio = 0):
 			pipeline.feed(frame)
@@ -174,14 +179,14 @@ def encodeFile(
 	encodeTime: float = time.time() - startTime
 
 	logging.info(
-		f"converted {outputPath.name} ({encodeTime:.1f}s, "
-		f"{pipeline.chunksEncoded / encodeTime:.1f} chunks/s)"
+		f"converted {outputPath.name} in {encodeTime:.0f}s "
+		f"({encodeTime / duration:.2f}x)"
 	)
 
 ## Main
 
 DEFAULT_EXTENSIONS:    list[str]   = [ "wav", "flac", "mp3", "m4a", "ogg" ]
-DEFAULT_PITCH_OFFSETS: list[float] = [ -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0 ]
+DEFAULT_PITCH_OFFSETS: list[float] = [ -2.0, -1.0, 0.0, 1.0, 2.0 ]
 DEFAULT_SAMPLE_RATE:   int         = 44100
 
 def createParser() -> ArgumentParser:
@@ -283,6 +288,10 @@ def main():
 		parser.error("too many pitch offsets specified")
 
 	args.pitch_offsets.sort()
+	logging.info(
+		f"output sample rate: {args.resample} Hz, pitch offsets: " +
+		", ".join(f"{pitch:.1f}" for pitch in args.pitch_offsets)
+	)
 
 	# Gather all paths before spawning the encoding pool.
 	calls: list[tuple[str, str, list[int], int]] = []

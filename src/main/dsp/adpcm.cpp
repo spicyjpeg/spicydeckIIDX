@@ -107,7 +107,7 @@ IRAM_ATTR int64_t SSTEncoder::tryEncodeBlock_(
 	int       s1 = s1_,       s2 = s2_;
 
 	const int actualGain = gain + ADPCM_FILTER_BITS_;
-	int       lastNibble = 0;
+	int       lastNibble = -1;
 	int64_t   totalError = 0;
 
 	for (int i = SST_SAMPLES_PER_BLOCK; i > 0; i--) {
@@ -128,10 +128,12 @@ IRAM_ATTR int64_t SSTEncoder::tryEncodeBlock_(
 
 		const int nibble = encoded + 8;
 
-		if (!(i % 2))
+		if (lastNibble < 0) {
 			lastNibble = nibble;
-		else
+		} else {
 			*(ptr++)   = lastNibble | (nibble << 4);
+			lastNibble = -1;
+		}
 
 		// Simulate the sample being decoded back in order to measure the error.
 		int decoded = encoded << actualGain;

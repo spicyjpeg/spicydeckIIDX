@@ -1,17 +1,18 @@
 
 #pragma once
 
-#include "FreeRTOSConfig.h"
-#include "freertos/FreeRTOS.h"
+#include <stdint.h>
 #include "src/main/drivers/input.hpp"
 #include "src/main/dsp/dsp.hpp"
-#include "src/main/taskbase.hpp"
+#include "src/main/util/rtos.hpp"
+
+namespace tasks {
 
 static constexpr float DECK_TARGET_RPM = 45.0;
 
 /* Deck object */
 
-class DeckIO {
+class IOTaskDeck {
 	friend class IOTask;
 
 private:
@@ -20,8 +21,6 @@ private:
 	int   direction_;
 	float targetRPS_;
 
-	inline DeckIO(void) {}
-
 	void init_(void);
 	float updateMeasuredSpeed_(int16_t value, float dt);
 	void updateTargetSpeed_(uint8_t value);
@@ -29,20 +28,18 @@ private:
 
 /* Main input polling and motor control task */
 
-static constexpr int IO_TASK_PERIOD = 10;
-
-class IOTask : public Task {
+class IOTask : public util::Task {
 private:
-	DeckIO decks_[drivers::NUM_DECKS];
+	IOTaskDeck decks_[drivers::NUM_DECKS];
 
 	inline IOTask(void) :
-		Task("IOTask", 0, configMAX_PRIORITIES - 2, IO_TASK_PERIOD)
+		Task("IOTask", 0x400)
 	{}
 
-	void mainInit_(void);
-	void mainLoop_(void);
-	void handleMessage_(const TaskMessage &message);
+	[[noreturn]] void taskMain_(void) override;
 
 public:
 	static IOTask &instance(void);
 };
+
+}

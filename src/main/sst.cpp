@@ -3,10 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "src/main/dsp/adpcm.hpp"
 #include "src/main/dsp/dsp.hpp"
+#include "src/main/util/templates.hpp"
 #include "src/main/defs.hpp"
 #include "src/main/sst.hpp"
 
@@ -14,9 +14,7 @@ namespace sst {
 
 static const char TAG_[]{ "sst" };
 
-static constexpr uint32_t INVALID_CHUNK_ = UINT32_MAX;
-
-/* .sst file reader and sector cache */
+/* .sst file reader */
 
 static const char *const KEY_NAMES_[]{
 	"C", "C#/Db",
@@ -28,58 +26,12 @@ static const char *const KEY_NAMES_[]{
 	"B"
 };
 
-SSTSector *Reader::cacheSector_(uint32_t chunk) {
-	// Determine which cache entry to overwrite with the new sector.
-	auto         &set = cache_.as<SectorCache>()->sets[chunk % NUM_CACHE_SETS];
-	CachedSector *bestEntry;
-
-	if (evictionMode_ == EVICT_RANDOM) {
-		bestEntry = &set[rand() % NUM_CACHE_ENTRIES];
-	} else {
-		uint32_t bestChunk = UINT32_MAX;
-		bestEntry          = &set[0];
-
-		for (auto &entry : set) {
-			const bool isBest = (evictionMode_ == EVICT_LOWEST)
-				? (entry.chunk < bestChunk)
-				: (entry.chunk > bestChunk);
-
-			if (isBest) {
-				bestChunk = entry.chunk;
-				bestEntry = &entry;
-			}
-		}
-	}
-
-	// Read the sector into the chosen entry.
-	const uint32_t offset = (chunk * header_.info.numVariants) + variant_;
-
-	if (
-		fseek(file_, sizeof(SSTHeader) + sizeof(SSTSector) * offset, SEEK_SET) ||
-		!fread(&bestEntry->sector, sizeof(SSTSector), 1, file_)
-	) {
-		ESP_LOGE(TAG_, ".sst read failed");
-		return nullptr;
-	}
-
-	return &bestEntry->sector;
-}
-
-void Reader::flushCache_(void) {
-	if (!file_)
-		return;
-
-	for (auto &set : cache_.as<SectorCache>()->sets) {
-		for (auto &entry : set)
-			entry.chunk = INVALID_CHUNK_;
-	}
-}
-
 bool Reader::open(const char *path) {
 	if (file_)
 		close();
 
-	uint32_t offset;
+	size_t  waveformOffset;
+	int16_t bestPitch = INT16_MAX;
 
 	file_ = fopen(path, "rb");
 
@@ -99,33 +51,32 @@ bool Reader::open(const char *path) {
 	waveform_.allocate((header_.info.waveformLength + 1) / 2);
 	assert(waveform_.ptr);
 
-	offset = header_.info.numChunks * header_.info.numVariants;
+	waveformOffset  = header_.info.numChunks * header_.info.numVariants;
+	waveformOffset *= sizeof(SSTSector);
+	waveformOffset += sizeof(SSTHeader);
 
 	if (
-		fseek(file_, sizeof(SSTHeader) + sizeof(SSTSector) * offset, SEEK_SET) ||
+		fseek(file_, waveformOffset, SEEK_SET) ||
 		!fread(waveform_.ptr, waveform_.length, 1, file_)
 	) {
 		ESP_LOGE(TAG_, "could not load .sst waveform: %s", path);
 		goto cleanup;
 	}
 
-	// By default, use the first variant whose pitch offset is zero. This also
-	// flushes the sector cache.
+	// By default, use the variant whose pitch offset is closest to zero.
 	for (int i = 0; i < header_.info.numVariants; i++) {
-		if (!header_.info.pitchOffsets[i]) {
-			variant_ = i;
-			break;
+		auto pitch = header_.info.pitchOffsets[i];
+
+		if (pitch < 0)
+			pitch = -pitch;
+
+		if (pitch < bestPitch) {
+			bestPitch       = pitch;
+			currentVariant_ = i;
 		}
 	}
 
-	// Fill up the cache with the first few sectors of the file.
-	cache_.allocate<SectorCache>();
-	assert(cache_.ptr);
-	flushCache_();
-
-	for (int i = 0; i < NUM_CACHE_ENTRIES; i++)
-		cacheSector_(i);
-
+	ESP_LOGI(TAG_, "loaded .sst: %s (variant %d)", path, currentVariant_);
 	return true;
 
 cleanup:
@@ -138,41 +89,35 @@ void Reader::close(void) {
 		return;
 
 	fclose(file_);
-	cache_.destroy();
 	waveform_.destroy();
 	file_ = nullptr;
 }
 
-bool Reader::read(dsp::Sample *output, uint32_t chunk) {
-	assert(file_ && (chunk < header_.info.numChunks));
+bool Reader::read(SSTSector &output, int chunk) {
+	if (!file_)
+		return false;
+	if ((chunk < 0) || (chunk >= header_.info.numChunks))
+		return false;
 
-	// Check if the sector is cached.
-	auto      &set    = cache_.as<SectorCache>()->sets[chunk % NUM_CACHE_SETS];
-	SSTSector *sector = nullptr;
+	size_t chunkOffset = chunk * header_.info.numVariants;
+	chunkOffset       += currentVariant_;
+	chunkOffset       *= sizeof(SSTSector);
+	chunkOffset       += sizeof(SSTHeader);
 
-	for (auto &entry : set) {
-		if (entry.chunk == chunk) {
-			sector = &entry.sector;
-			break;
-		}
+	if (
+		fseek(file_, chunkOffset, SEEK_SET) ||
+		!fread(&output, sizeof(SSTSector), 1, file_)
+	) {
+		ESP_LOGE(TAG_, ".sst read failed, c=%d, v=%d", chunk, currentVariant_);
+		return false;
 	}
-
-	if (!sector)
-		sector = cacheSector_(chunk);
-
-	for (int i = 0; i < NUM_CHANNELS; i++)
-		dsp::decodeSST(
-			&output[i],
-			sector->channels[i],
-			BLOCKS_PER_SECTOR,
-			NUM_CHANNELS
-		);
 
 	return true;
 }
 
 size_t Reader::getKeyName(char *output) const {
-	assert(file_);
+	if (!file_)
+		return 0;
 
 	if (!header_.info.keyScale) {
 		output[0] = '-';
@@ -181,7 +126,7 @@ size_t Reader::getKeyName(char *output) const {
 	}
 
 	int key = header_.info.keyNote * SST_PITCH_OFFSET_UNIT;
-	key    += header_.info.pitchOffsets[variant_];
+	key    += header_.info.pitchOffsets[currentVariant_];
 	key    += SST_PITCH_OFFSET_UNIT	* 12; // Workaround for % sign behavior
 	key    += SST_PITCH_OFFSET_UNIT / 2;
 	key    /= SST_PITCH_OFFSET_UNIT;
@@ -200,105 +145,109 @@ size_t Reader::getKeyName(char *output) const {
 
 /* .sst sampler */
 
-static constexpr int STEP_THRESHOLD_ = SAMPLE_OFFSET_UNIT * 100;
+static constexpr int CHUNK_INDEX_UNIT_ = SAMPLE_OFFSET_UNIT * SAMPLES_PER_SECTOR;
+static constexpr int STEP_THRESHOLD_   = SAMPLE_OFFSET_UNIT * 100;
 
-IRAM_ATTR static int interpolate_(int sample1, int sample2, int alpha) {
+IRAM_ATTR static inline int interpolate_(int sample1, int sample2, int alpha) {
 	int diff = (sample2 - sample1) * alpha;
 	diff    /= SAMPLE_OFFSET_UNIT;
 
 	return sample1 + diff;
 }
 
+IRAM_ATTR const SamplerCacheEntry *Sampler::loadChunk_(int chunk) {
+	auto &oldEntry = cache_[currentCacheEntry_];
+
+	if (oldEntry.chunk == chunk)
+		return &oldEntry;
+
+	currentCacheEntry_ ^= 1;
+	auto &newEntry      = cache_[currentCacheEntry_];
+
+	if (newEntry.chunk == chunk)
+		return &newEntry;
+
+	// Decode the sector returned by the callback, falling back to generating
+	// silence if none was returned.
+	if (readCallback_) {
+		auto sector = readCallback_(chunk, arg_);
+
+		if (sector) {
+			for (int i = 0; i < NUM_CHANNELS; i++)
+				dsp::decodeSST(
+					&newEntry.samples[0][i],
+					sector->channels[i],
+					NUM_CHANNELS
+				);
+
+			if (readDoneCallback_)
+				readDoneCallback_(sector, arg_);
+
+			newEntry.chunk = chunk;
+			return &newEntry;
+		}
+	}
+
+	util::clear(newEntry.samples);
+	return &newEntry;
+}
+
 IRAM_ATTR void Sampler::flush(void) {
-	cache_[0].chunk = INVALID_CHUNK_;
-	cache_[1].chunk = INVALID_CHUNK_;
+	cache_[0].chunk = -1;
+	cache_[1].chunk = -1;
 }
 
 IRAM_ATTR void Sampler::process(
 	dsp::Sample *output,
-	Reader      &reader,
-	uint32_t    offset,
+	int         offset,
 	int         step,
 	size_t      numSamples
 ) {
-	// Output silence if no file is loaded or the playback rate is too slow.
-	auto header = reader.getHeader();
-
-	if (!header || ((step > -STEP_THRESHOLD_) && (step < STEP_THRESHOLD_))) {
+	// Output silence if the playback rate is too slow.
+	if ((step > -STEP_THRESHOLD_) && (step < STEP_THRESHOLD_)) {
 		memset(output, 0, numSamples * sizeof(dsp::Sample) * NUM_CHANNELS);
 		return;
 	}
 
-	const int numChunks = header->info.numChunks;
+	int chunk = offset / CHUNK_INDEX_UNIT_;
+	offset   %= CHUNK_INDEX_UNIT_;
 
-	int cachedChunk = offset / (SAMPLE_OFFSET_UNIT * SAMPLES_PER_SECTOR);
-	int cacheEntry;
-
-	// Ensure a decoded copy of the first sector going to be sampled is in the
-	// cache.
-	if (cachedChunk == cache_[0].chunk) {
-		cacheEntry = 0;
-	} else if (cachedChunk == cache_[1].chunk) {
-		cacheEntry = 1;
-	} else if (cachedChunk < numChunks) {
-		reader.read(cache_[0].samples[0], cachedChunk);
-		cacheEntry = 0;
-	}
+	auto cacheEntry = loadChunk_(chunk);
 
 	for (; numSamples > 0; numSamples--) {
-		const int sampleOffset = offset / SAMPLE_OFFSET_UNIT;
-		const int alpha        = offset % SAMPLE_OFFSET_UNIT;
+		const int sample = offset >> SAMPLE_OFFSET_BITS;
+		const int alpha  = offset & (SAMPLE_OFFSET_UNIT - 1);
+
+		const dsp::Sample *sample1 = cacheEntry->samples[sample];
+		const dsp::Sample *sample2;
 
 		// In order to perform linear interpolation, both the sample preceding
-		// the current offset and the one after it are required. This two-sample
-		// window may span two sectors, so a few different cases must be handled
-		// here:
+		// the current offset and the one after it are required. This window may
+		// span two sectors, so two different cases must be handled here:
 		// - both samples are in the current sector
 		//   -> sample the current sector only;
-		// - both samples are in a new sector
-		//   -> move onto the next sector and sample it;
-		// - the second sample is in a new sector
-		//   -> load the next sector, sample both sectors then move on;
-		// - either sample is out of bounds
-		//   -> output silence.
-		const int chunk1  = sampleOffset       / SAMPLES_PER_SECTOR;
-		const int offset1 = sampleOffset       % SAMPLES_PER_SECTOR;
-		const int chunk2  = (sampleOffset + 1) / SAMPLES_PER_SECTOR;
-		const int offset2 = (sampleOffset + 1) % SAMPLES_PER_SECTOR;
+		// - the second sample is in the next sector
+		//   -> load the next sector and sample both.
+		if (sample != (SAMPLES_PER_SECTOR - 1))
+			sample2 = cacheEntry->samples[sample + 1];
+		else
+			sample2 = loadChunk_(chunk + 1)->samples[0];
 
-		if ((chunk1 >= numChunks) || (chunk2 >= numChunks)) {
-			for (int i = 0; i < NUM_CHANNELS; i++)
-				output[i] = 0;
-		} else {
-			auto &sector     = cache_[cacheEntry];
-			auto &nextSector = cache_[cacheEntry ^ 1];
+		for (int i = 0; i < NUM_CHANNELS; i++)
+			*(output++) = interpolate_(sample1[i], sample2[i], alpha);
 
-			DecodedSector *sector1, *sector2;
-
-			if (chunk2 == cachedChunk) {
-				sector1 = &sector;
-				sector2 = &sector;
-			} else {
-				sector1 = (chunk1 == cachedChunk) ? &sector : &nextSector;
-				sector2 = &nextSector;
-
-				if (nextSector.chunk != chunk2)
-					reader.read(nextSector.samples[0], chunk2);
-
-				cachedChunk = chunk2;
-				cacheEntry ^= 1;
-			}
-
-			for (int i = 0; i < NUM_CHANNELS; i++)
-				output[i] = interpolate_(
-					sector1->samples[offset1][i],
-					sector2->samples[offset2][i],
-					alpha
-				);
-		}
-
-		output += NUM_CHANNELS;
+		// Use a DDA-like algorithm to update the chunk index incrementally
+		// without performing division. As the step can be negative, overflows
+		// in either direction must be taken into account.
 		offset += step;
+
+		if (offset >= CHUNK_INDEX_UNIT_) {
+			cacheEntry = loadChunk_(--chunk);
+			offset    -= CHUNK_INDEX_UNIT_;
+		} else if (offset < 0) {
+			cacheEntry = loadChunk_(++chunk);
+			offset    += CHUNK_INDEX_UNIT_;
+		}
 	}
 }
 

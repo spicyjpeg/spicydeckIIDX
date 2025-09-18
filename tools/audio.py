@@ -10,7 +10,7 @@ from numpy  import dtype, ndarray
 ## Pitch shifting and .sst ADPCM encoding
 
 NUM_CHANNELS:       int = 2
-BLOCKS_PER_SECTOR:  int = 21
+BLOCKS_PER_SECTOR:  int = 85
 SAMPLES_PER_SECTOR: int = 22 * BLOCKS_PER_SECTOR
 
 class VariantEncoder:

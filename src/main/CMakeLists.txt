@@ -12,14 +12,15 @@ idf_component_register(
 		dsp/dsp.cpp
 		renderer/font.cpp
 		renderer/renderer.cpp
+		tasks/audiotask.cpp
+		tasks/iotask.cpp
+		tasks/streamtask.cpp
+		tasks/uitask.cpp
 		util/hash.cpp
+		util/rtos.cpp
 		util/string.cpp
-		audiotask.cpp
-		iotask.cpp
 		main.cpp
 		sst.cpp
-		taskbase.cpp
-		uitask.cpp
 	INCLUDE_DIRS
 		../..
 	PRIV_REQUIRES
@@ -31,6 +32,7 @@ idf_component_register(
 		esp_driver_pcnt
 		esp_driver_sdmmc
 		esp_driver_spi
+		esp_ringbuf
 		esp_timer
 		fatfs
 		freertos

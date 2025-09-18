@@ -99,15 +99,15 @@ cdef class WaveformEncoder:
 
 		cdef uint8_t[::1] chunkView = chunk
 
-		cdef size_t numEncoded = self._encoder.encode(
+		cdef size_t length = self._encoder.encode(
 			&chunkView[0],
 			&samples[0],
 			sampleRate,
 			samples.shape[0],
-			1,
+			1
 		)
 
-		return chunk[0:(numEncoded + 1) // 2]
+		return chunk[0:length]
 
 ## KeyFinder bindings
 

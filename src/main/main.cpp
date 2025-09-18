@@ -1,5 +1,6 @@
 
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
 #include "src/main/drivers/audio.hpp"
 #include "src/main/drivers/display.hpp"
 #include "src/main/drivers/input.hpp"
@@ -7,58 +8,65 @@
 #include "src/main/drivers/storage.hpp"
 #include "src/main/renderer/font.hpp"
 #include "src/main/renderer/renderer.hpp"
-#include "src/main/audiotask.hpp"
+#include "src/main/tasks/audiotask.hpp"
+#include "src/main/tasks/iotask.hpp"
+#include "src/main/tasks/streamtask.hpp"
+#include "src/main/tasks/uitask.hpp"
 #include "src/main/defs.hpp"
-#include "src/main/iotask.hpp"
-#include "src/main/uitask.hpp"
 
 static const char TAG_[]{ "main" };
 
 /* Entry point */
 
 static void showErrorScreen(const char *text) {
-	auto &display = drivers::DisplayDriver::instance();
-
 	renderer::Renderer gfx;
 	renderer::Font     font;
 
-	gfx.init(DISPLAY_WIDTH, DISPLAY_HEIGHT);
-	gfx.clear(UI_COLOR_BACKGROUND);
+	gfx.init(tasks::DISPLAY_WIDTH, tasks::DISPLAY_HEIGHT);
+	gfx.clear(tasks::UI_COLOR_BACKGROUND);
 
 	font.initDefault();
 	font.draw(
 		gfx,
 		8,
 		8,
-		DISPLAY_WIDTH - (8 * 2),
+		tasks::DISPLAY_WIDTH - (8 * 2),
 		16,
 		"Error",
-		UI_COLOR_TITLE
+		tasks::UI_COLOR_TITLE
 	);
 	font.draw(
 		gfx,
 		8,
 		8 + 16,
-		DISPLAY_WIDTH  - (8 * 2),
-		DISPLAY_HEIGHT - (8 * 2 + 16),
+		tasks::DISPLAY_WIDTH  - (8 * 2),
+		tasks::DISPLAY_HEIGHT - (8 * 2 + 16),
 		text,
-		UI_COLOR_TEXT1,
+		tasks::UI_COLOR_TEXT1,
 		true
 	);
 
-	display.updateAsync(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, gfx.flip());
+	auto &displayDriver = drivers::DisplayDriver::instance();
+
+	displayDriver.updateAsync(
+		0,
+		0,
+		tasks::DISPLAY_WIDTH,
+		tasks::DISPLAY_HEIGHT,
+		gfx.flip()
+	);
 }
 
 void run(void) {
-	auto &display = drivers::DisplayDriver::instance();
-	auto &input   = drivers::InputDriver::instance();
-	auto &storage = drivers::StorageDriver::instance();
-	auto &audio   = drivers::AudioDriver::instance();
-	auto &motor   = drivers::MotorDriver::instance();
+	auto &displayDriver = drivers::DisplayDriver::instance();
+	auto &inputDriver   = drivers::InputDriver::instance();
+	auto &storageDriver = drivers::StorageDriver::instance();
+	auto &audioDriver   = drivers::AudioDriver::instance();
+	auto &motorDriver   = drivers::MotorDriver::instance();
 
-	display.init(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+	displayDriver.init(tasks::DISPLAY_WIDTH, tasks::DISPLAY_HEIGHT);
 
-	if (!input.init()) {
+	if (!inputDriver.init()) {
 		showErrorScreen(
 			"Failed to initialize the input subsystem.\n"
 			"\n"
@@ -68,7 +76,7 @@ void run(void) {
 		);
 		return;
 	}
-	if (!storage.init("/sd")) {
+	if (!storageDriver.init("/sd")) {
 		showErrorScreen(
 			"Failed to initialize the SD card.\n"
 			"\n"
@@ -79,22 +87,29 @@ void run(void) {
 		return;
 	}
 
-	audio.init(OUTPUT_SAMPLE_RATE, AUDIO_BUFFER_SIZE);
-	motor.init();
+	audioDriver.init(tasks::OUTPUT_SAMPLE_RATE, tasks::AUDIO_BUFFER_SIZE);
+	motorDriver.init();
 
-	auto &audioTask = AudioTask::instance();
-	auto &ioTask    = IOTask::instance();
-	auto &uiTask    = UITask::instance();
+	ESP_LOGI(TAG_, "initialization complete");
 
-	if (!audioTask.start()) {
+	auto &audioTask  = tasks::AudioTask::instance();
+	auto &ioTask     = tasks::IOTask::instance();
+	auto &streamTask = tasks::StreamTask::instance();
+	auto &uiTask     = tasks::UITask::instance();
+
+	if (!audioTask.run(1, configMAX_PRIORITIES - 2)) {
 		showErrorScreen("Failed to start the audio processing task.");
 		return;
 	}
-	if (!ioTask.start()) {
+	if (!ioTask.run(1, configMAX_PRIORITIES - 1)) {
 		showErrorScreen("Failed to start the I/O processing task.");
 		return;
 	}
-	if (!uiTask.start()) {
+	if (!streamTask.run(0, configMAX_PRIORITIES - 1)) {
+		showErrorScreen("Failed to start the audio file streaming task.");
+		return;
+	}
+	if (!uiTask.run(0, configMAX_PRIORITIES / 2)) {
 		showErrorScreen("Failed to start the user interface task.");
 		return;
 	}
