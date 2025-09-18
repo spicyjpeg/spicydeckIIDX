@@ -33,7 +33,7 @@ void Font::initDefault(void) {
 	length       = sizeof(defaultFont);
 	destructible = false;
 
-	assert(as<SFTHeader>()->validate());
+	assert(getHeader()->validate());
 }
 
 bool Font::initFromFile(const char *path) {
@@ -59,7 +59,7 @@ bool Font::initFromFile(const char *path) {
 		ESP_LOGE(TAG_, "could not read .sft file: %s", path);
 		goto cleanup;
 	}
-	if (!as<SFTHeader>()->validate()) {
+	if (!getHeader()->validate()) {
 		ESP_LOGE(TAG_, "not a valid .sft file: %s", path);
 		goto cleanup;
 	}
@@ -73,7 +73,7 @@ cleanup:
 }
 
 IRAM_ATTR const SFTEntry *Font::get_(util::UTF8CodePoint ch) const {
-	auto header = as<SFTHeader>();
+	auto header = getHeader();
 	auto entry  = util::getHashTableEntry(
 		reinterpret_cast<const SFTEntry *>(&header[1]),
 		header->numBuckets,
@@ -101,7 +101,7 @@ IRAM_ATTR void Font::draw(
 	if (!str)
 		return;
 
-	auto header = as<SFTHeader>();
+	auto header = getHeader();
 
 	int       currentX  = x;
 	const int boundaryX = x + w;
@@ -195,10 +195,10 @@ IRAM_ATTR int Font::getCharacterWidth(util::UTF8CodePoint ch) const {
 			return 0;
 
 		case '\t':
-			return as<SFTHeader>()->tabWidth;
+			return getHeader()->tabWidth;
 
 		case ' ':
-			return as<SFTHeader>()->spaceWidth;
+			return getHeader()->spaceWidth;
 
 		default:
 			auto entry = get_(ch);
@@ -211,7 +211,7 @@ IRAM_ATTR int Font::getStringWidth(const char *str, bool breakOnSpace) const {
 	if (!str)
 		return 0;
 
-	auto header = as<SFTHeader>();
+	auto header = getHeader();
 
 	int width = 0, maxWidth = 0;
 

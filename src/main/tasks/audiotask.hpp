@@ -1,11 +1,13 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #include "src/main/drivers/input.hpp"
 #include "src/main/drivers/inputdefs.hpp"
 #include "src/main/dsp/dsp.hpp"
 #include "src/main/util/rtos.hpp"
+#include "src/main/util/templates.hpp"
 #include "src/main/sst.hpp"
 
 namespace tasks {
@@ -23,6 +25,28 @@ enum DeckFlag : uint8_t {
 	DECK_FLAG_SHIFT_USED = 1 << 4
 };
 
+struct DeckState {
+public:
+	int playbackOffset, playbackStep;
+	int cueOffset, loopStart, loopEnd;
+
+	int     sampleRate;
+	uint8_t flags;
+
+	inline DeckState(void) {
+		reset();
+	}
+	inline float getCurrentTime(void) const {
+		if (!sampleRate)
+			return 0.0f;
+
+		return
+			float(playbackOffset) / float(sampleRate * sst::SAMPLE_OFFSET_UNIT);
+	}
+
+	void reset(void);
+};
+
 struct SectorQueueEntry {
 public:
 	int            chunk;
@@ -37,18 +61,10 @@ private:
 	dsp::BiquadFilter filter_;
 	dsp::Sample       audioBuffer_[AUDIO_BUFFER_SIZE][sst::NUM_CHANNELS];
 
+	dsp::FloatBiquadFilter smoothingFilter_;
+
+	DeckState                            state_;
 	util::InPlaceQueue<SectorQueueEntry> sectorQueue_;
-
-	int     sampleRate_;
-	uint8_t flags_;
-
-	int offset_, cueOffset_, loopStart_, loopEnd_;
-	int step_;
-
-	inline AudioTaskDeck(void) :
-		sampleRate_(0),
-		flags_(0)
-	{}
 
 	void init_(void);
 	void process_(void);
@@ -86,6 +102,23 @@ private:
 public:
 	inline void updateInputs(const drivers::InputState &inputs) {
 		inputQueue_.push(inputs);
+	}
+	inline SectorQueueEntry *feedSector(int deck) {
+		return decks_[deck].sectorQueue_.pushItem();
+	}
+	inline void finalizeFeed(int deck) {
+		decks_[deck].sectorQueue_.finalizePush();
+	}
+	inline size_t getQueueLength(int deck) const {
+		return decks_[deck].sectorQueue_.getLength();
+	}
+	inline void getDeckState(DeckState &output, int index) const {
+		// The DeckState struct is not properly locked for concurrent access.
+		// This may result in this method running while the struct is being
+		// updated by the audio task and thus returning a partial update, but
+		// that should not be an issue as all other tasks are merely displaying
+		// the decks' current state.
+		util::copy(output, decks_[index].state_);
 	}
 
 	static AudioTask &instance(void);

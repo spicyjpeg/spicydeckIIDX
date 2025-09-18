@@ -138,6 +138,9 @@ public:
 			blocking ? portMAX_DELAY : 0
 		) == pdPASS;
 	}
+	inline void forcePut(const T &item) {
+		xQueueOverwrite(handle_, &item);
+	}
 	inline bool get(T &item, bool blocking = false) {
 		return xQueueReceive(
 			handle_,
@@ -218,23 +221,13 @@ public:
 	inline const T *popItem(bool blocking = false) {
 		assert(!poppedItem_);
 
-		size_t pending;
-
-		vRingbufferGetInfo(
-			handle_,
-			nullptr,
-			nullptr,
-			nullptr,
-			nullptr,
-			&pending
-		);
-
-		if (pending < sizeof(T))
+		if (!getLength())
 			return nullptr;
 
+		size_t dummy;
 		poppedItem_ = xRingbufferReceiveUpTo(
 			handle_,
-			&pending,
+			&dummy,
 			blocking ? portMAX_DELAY : 0,
 			sizeof(T)
 		);
@@ -246,6 +239,20 @@ public:
 
 		vRingbufferReturnItem(handle_, poppedItem_);
 		poppedItem_ = nullptr;
+	}
+	inline size_t getLength(void) const {
+		size_t length;
+
+		vRingbufferGetInfo(
+			handle_,
+			nullptr,
+			nullptr,
+			nullptr,
+			nullptr,
+			&length
+		);
+
+		return length;
 	}
 };
 

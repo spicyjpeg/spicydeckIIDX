@@ -58,6 +58,9 @@ public:
 	inline void release(void) {
 		destroy();
 	}
+	inline const SFTHeader *getHeader(void) const {
+		return as<SFTHeader>();
+	}
 	inline void draw(
 		Renderer   &renderer,
 		int        x,

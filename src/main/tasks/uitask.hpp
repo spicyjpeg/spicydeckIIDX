@@ -1,10 +1,13 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 #include "src/main/drivers/input.hpp"
 #include "src/main/renderer/font.hpp"
 #include "src/main/renderer/renderer.hpp"
 #include "src/main/util/rtos.hpp"
+#include "src/main/util/templates.hpp"
 
 namespace tasks {
 
@@ -34,6 +37,9 @@ enum UIColor : renderer::RGB888 {
 static constexpr int DISPLAY_WIDTH  = 160;
 static constexpr int DISPLAY_HEIGHT = 128;
 
+static constexpr size_t MAX_PATH_LENGTH     = 128;
+static constexpr size_t MAX_LIBRARY_ENTRIES = 128;
+
 class UITask;
 
 class Screen {
@@ -49,9 +55,24 @@ public:
 };
 
 class LibraryScreen : public Screen {
+private:
+	util::BumpAllocator names_;
+	const char          *entries_[MAX_LIBRARY_ENTRIES];
+
+	char currentDir_[MAX_PATH_LENGTH], selectedPath_[MAX_PATH_LENGTH * 2];
+	int  numEntries_, selectedEntry_, lastUsedDeck_;
+
 public:
+	inline LibraryScreen(void) :
+		numEntries_(0),
+		selectedEntry_(0),
+		lastUsedDeck_(0)
+	{}
+
 	void draw(UITask &task) const override;
 	void update(UITask &task, const drivers::InputState &inputs) override;
+
+	void loadDirectory(const char *root);
 };
 
 /* Main UI rendering task */

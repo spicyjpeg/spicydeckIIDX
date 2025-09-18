@@ -146,6 +146,37 @@ public:
 	);
 };
 
+/* Floating point biquad filter */
+
+class FloatBiquadFilter {
+private:
+	float a1_, a2_;
+	float b0_, b1_, b2_;
+
+	float sa1_, sa2_;
+	float sb1_, sb2_;
+
+public:
+	inline FloatBiquadFilter(void) {
+		configure(FILTER_LOWPASS, 1.0f);
+		reset();
+	}
+
+	// Cutoff must be specified as (cutoff frequency / sample rate * 2) ratio
+	void configure(
+		BiquadFilterType type,
+		float            cutoff,
+		float            resonance = 1.0f
+	);
+	void configurePeaking(
+		float cutoff,
+		float resonance = 1.0f,
+		float gain      = 1.0f
+	);
+	void reset(void);
+	float update(float value);
+};
+
 /* 4-bit waveform data generator */
 
 static constexpr int     WAVEFORM_SAMPLE_RATE = 32;

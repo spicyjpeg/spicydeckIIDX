@@ -238,12 +238,12 @@ public:
 		return reinterpret_cast<T *>(allocate(sizeof(T) * count));
 	}
 
-	inline void *allocate(size_t _length) {
+	inline void *allocate(size_t length_) {
 		if (ptr && destructible)
 			delete[] as<uint8_t>();
 
-		ptr          = _length ? (new uint8_t[_length]) : nullptr;
-		length       = _length;
+		ptr          = length_ ? (new uint8_t[length_]) : nullptr;
+		length       = length_;
 		destructible = true;
 
 		return ptr;
@@ -257,6 +257,54 @@ public:
 			length       = 0;
 			destructible = false;
 		}
+	}
+};
+
+/* Simple bump allocator */
+
+class BumpAllocator : public Data {
+private:
+	void *allocPtr_;
+
+public:
+	template<typename T> inline T *allocate(size_t count = 1) {
+		return reinterpret_cast<T *>(allocate(sizeof(T) * count));
+	}
+	inline void *allocate(size_t length_) {
+		allocPtr_ = Data::allocate(length_);
+
+		return allocPtr_;
+	}
+	inline void reset(void) {
+		allocPtr_ = ptr;
+	}
+
+	inline const void *add(const void *data, size_t dataLength) {
+		auto copied = reinterpret_cast<uint8_t *>(allocPtr_);
+		auto dest   = &copied[dataLength];
+
+		if (dest >= &as<uint8_t>()[length])
+			return nullptr;
+
+		memcpy(copied, data, dataLength);
+		allocPtr_ = dest;
+
+		return copied;
+	}
+	inline const char *add(const char *str) {
+		auto copied = reinterpret_cast<char *>(allocPtr_);
+		auto dest   = copied;
+
+		do {
+			*(dest++) = *(str++);
+
+			if (dest >= &as<char>()[length])
+				return nullptr;
+		} while (*str);
+
+		allocPtr_ = dest;
+
+		return copied;
 	}
 };
 

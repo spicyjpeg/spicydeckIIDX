@@ -17,13 +17,11 @@ class IOTaskDeck {
 
 private:
 	dsp::PIDController pid_;
-
-	int   direction_;
-	float targetRPS_;
+	float              targetRPS_;
 
 	void init_(void);
 	float updateMeasuredSpeed_(int16_t value, float dt);
-	void updateTargetSpeed_(uint8_t value);
+	void updateTargetSpeed_(uint8_t value, bool reverse = false);
 };
 
 /* Main input polling and motor control task */

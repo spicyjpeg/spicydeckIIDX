@@ -30,8 +30,7 @@ bool Reader::open(const char *path) {
 	if (file_)
 		close();
 
-	size_t  waveformOffset;
-	int16_t bestPitch = INT16_MAX;
+	size_t waveformOffset;
 
 	file_ = fopen(path, "rb");
 
@@ -63,19 +62,7 @@ bool Reader::open(const char *path) {
 		goto cleanup;
 	}
 
-	// By default, use the variant whose pitch offset is closest to zero.
-	for (int i = 0; i < header_.info.numVariants; i++) {
-		auto pitch = header_.info.pitchOffsets[i];
-
-		if (pitch < 0)
-			pitch = -pitch;
-
-		if (pitch < bestPitch) {
-			bestPitch       = pitch;
-			currentVariant_ = i;
-		}
-	}
-
+	resetVariant();
 	ESP_LOGI(TAG_, "loaded .sst: %s (variant %d)", path, currentVariant_);
 	return true;
 
@@ -113,6 +100,26 @@ bool Reader::read(SSTSector &output, int chunk) {
 	}
 
 	return true;
+}
+
+void Reader::resetVariant(void) {
+	if (!file_)
+		return;
+
+	// Find the variant whose pitch offset is closest to zero.
+	int16_t bestPitch = INT16_MAX;
+
+	for (int i = 0; i < header_.info.numVariants; i++) {
+		auto pitch = header_.info.pitchOffsets[i];
+
+		if (pitch < 0)
+			pitch = -pitch;
+
+		if (pitch < bestPitch) {
+			bestPitch       = pitch;
+			currentVariant_ = i;
+		}
+	}
 }
 
 size_t Reader::getKeyName(char *output) const {

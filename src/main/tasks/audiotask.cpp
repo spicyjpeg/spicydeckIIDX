@@ -19,6 +19,19 @@ namespace tasks {
 // Allocate ~96 KB per deck for the sector streaming FIFOs.
 static constexpr size_t NUM_QUEUED_SECTORS_ = 48;
 
+static constexpr float SMOOTHING_FACTOR_ = 0.3f;
+
+void DeckState::reset(void) {
+	playbackOffset = 0;
+	playbackStep   = 0;
+	cueOffset      = 0;
+	loopStart      = INT_MIN;
+	loopEnd        = INT_MIN;
+
+	sampleRate = 0;
+	flags      = 0;
+}
+
 void AudioTaskDeck::init_(void) {
 	sampler_.setCallbacks(
 		[](int chunk, void *arg) -> const sst::SSTSector * {
@@ -44,23 +57,23 @@ void AudioTaskDeck::init_(void) {
 		},
 		this
 	);
+	smoothingFilter_.configure(dsp::FILTER_LOWPASS, SMOOTHING_FACTOR_);
+
 	filter_.reset();
+	smoothingFilter_.reset();
+	state_.reset();
 
 	bool ok = sectorQueue_.allocate(NUM_QUEUED_SECTORS_);
 	assert(ok);
-
-	sampleRate_ = 0;
-	flags_      = 0;
-
-	offset_    = 0;
-	cueOffset_ = 0;
-	loopStart_ = INT_MIN;
-	loopEnd_   = INT_MIN;
-	step_      = 0;
 }
 
 void AudioTaskDeck::process_(void) {
-	sampler_.process(audioBuffer_[0], offset_, step_, AUDIO_BUFFER_SIZE);
+	sampler_.process(
+		audioBuffer_[0],
+		state_.playbackOffset,
+		state_.playbackStep,
+		AUDIO_BUFFER_SIZE
+	);
 
 	for (int i = 0; i < sst::NUM_CHANNELS; i++) {
 		filter_.process(
@@ -73,16 +86,16 @@ void AudioTaskDeck::process_(void) {
 	}
 
 	// Update the current playback position.
-	const int delta = step_ * AUDIO_BUFFER_SIZE;
+	const int delta = state_.playbackStep * AUDIO_BUFFER_SIZE;
 
-	if ((-delta) > offset_)
-		offset_  = 0;
+	if ((-delta) > state_.playbackOffset)
+		state_.playbackOffset  = 0;
 	else
-		offset_ += delta;
+		state_.playbackOffset += delta;
 
-	if (flags_ & DECK_FLAG_LOOPING) {
-		while (offset_ >= loopEnd_)
-			offset_ -= loopEnd_ - loopStart_;
+	if (state_.flags & DECK_FLAG_LOOPING) {
+		while (state_.playbackOffset >= state_.loopEnd)
+			state_.playbackOffset -= state_.loopEnd - state_.loopStart;
 	}
 }
 
@@ -90,11 +103,11 @@ void AudioTaskDeck::updateMeasuredSpeed_(int16_t value, float dt) {
 	float speed = float(value) / dt;
 	speed      /= float(drivers::DECK_STEPS_PER_REV);
 	speed      /= DECK_TARGET_RPM / 60.0f;
+	speed       = smoothingFilter_.update(speed);
 
-	// TODO: apply a filter here to stabilize playback speed
-	speed *= float(sampleRate_);
-	speed *= float(sst::SAMPLE_OFFSET_UNIT);
-	step_  = int(speed);
+	speed              *= float(state_.sampleRate);
+	speed              *= float(sst::SAMPLE_OFFSET_UNIT);
+	state_.playbackStep = int(speed);
 }
 
 void AudioTaskDeck::updateFilter_(uint8_t value) {
@@ -178,8 +191,8 @@ void AudioTask::handleInputs_(const drivers::InputState &inputs) {
 		crossfade          * mainVolume
 	);
 	monitorMixer_.configure(
-		(decks_[0].flags_ & DECK_FLAG_MONITORING) ? monitorVolume : 0.0f,
-		(decks_[1].flags_ & DECK_FLAG_MONITORING) ? monitorVolume : 0.0f
+		(decks_[0].state_.flags & DECK_FLAG_MONITORING) ? monitorVolume : 0.0f,
+		(decks_[1].state_.flags & DECK_FLAG_MONITORING) ? monitorVolume : 0.0f
 	);
 	bitcrusher_.configure(effectDepth);
 
@@ -217,58 +230,64 @@ void AudioTask::handleDeckButtons_(
 			streamTask.issueCommand(index, STREAM_CMD_NEXT_VARIANT);
 
 		if (pressed & drivers::DECK_BTN_RESTART)
-			deck.offset_ = 0;
+			deck.state_.playbackOffset = 0;
 
 		if (pressed & drivers::DECK_BTN_CUE_JUMP)
-			deck.offset_ = deck.cueOffset_;
+			deck.state_.playbackOffset = deck.state_.cueOffset;
 
 		if (pressed & drivers::DECK_BTN_CUE_SET)
-			deck.cueOffset_ = deck.offset_;
+			deck.state_.cueOffset = deck.state_.playbackOffset;
 
 		if (pressed & drivers::DECK_BTN_REVERSE)
-			deck.flags_ ^= DECK_FLAG_REVERSE;
+			deck.state_.flags ^= DECK_FLAG_REVERSE;
 
 		if (pressed & ~drivers::DECK_BTN_SHIFT)
-			deck.flags_ |= DECK_FLAG_SHIFT_USED;
+			deck.state_.flags |= DECK_FLAG_SHIFT_USED;
 	} else {
 		if (pressed & drivers::DECK_BTN_LOOP_IN) {
-			const int length = deck.loopEnd_ - deck.loopStart_;
-			deck.loopStart_  = deck.offset_;
+			const int length = deck.state_.loopEnd - deck.state_.loopStart;
+			deck.state_.loopStart  = deck.state_.playbackOffset;
 
 			// Move the entire loop when attempting to move the start point past
 			// the end.
-			if ((deck.loopEnd_ >= 0) && (deck.loopEnd_ < deck.offset_))
-				deck.loopEnd_ = deck.offset_ + length;
+			if (
+				(deck.state_.loopEnd >= 0) &&
+				(deck.state_.loopEnd < deck.state_.playbackOffset)
+			)
+				deck.state_.loopEnd = deck.state_.playbackOffset + length;
 		}
 
 		if (pressed & drivers::DECK_BTN_LOOP_OUT) {
-			if ((deck.loopStart_ >= 0) && (deck.offset_ > deck.loopStart_)) {
-				deck.loopEnd_ = deck.offset_;
-				deck.flags_  |= DECK_FLAG_LOOPING;
+			if (
+				(deck.state_.loopStart >= 0) &&
+				(deck.state_.playbackOffset > deck.state_.loopStart)
+			) {
+				deck.state_.loopEnd = deck.state_.playbackOffset;
+				deck.state_.flags  |= DECK_FLAG_LOOPING;
 			}
 		}
 
 		if (pressed & drivers::DECK_BTN_RELOOP) {
 			if (
-				(deck.loopStart_ >= 0) &&
-				(deck.loopEnd_   >= 0) &&
-				(deck.loopEnd_ > deck.loopStart_)
+				(deck.state_.loopStart >= 0) &&
+				(deck.state_.loopEnd   >= 0) &&
+				(deck.state_.loopEnd > deck.state_.loopStart)
 			)
-				deck.flags_ ^= DECK_FLAG_LOOPING;
+				deck.state_.flags ^= DECK_FLAG_LOOPING;
 		}
 
 		if (pressed & drivers::DECK_BTN_PLAY)
-			deck.flags_ ^= DECK_FLAG_PLAYING;
+			deck.state_.flags ^= DECK_FLAG_PLAYING;
 
 		// As the monitor button doubles as a shift button, monitoring should
 		// only be toggled when the button is released and no other button was
 		// pressed while it was held down.
 		if (released & drivers::DECK_BTN_MONITOR) {
-			if (!(deck.flags_ & DECK_FLAG_SHIFT_USED))
-				deck.flags_ ^= DECK_FLAG_MONITORING;
+			if (!(deck.state_.flags & DECK_FLAG_SHIFT_USED))
+				deck.state_.flags ^= DECK_FLAG_MONITORING;
 		}
 
-		deck.flags_ &= ~DECK_FLAG_SHIFT_USED;
+		deck.state_.flags &= ~DECK_FLAG_SHIFT_USED;
 	}
 }
 

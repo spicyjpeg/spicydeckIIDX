@@ -93,6 +93,9 @@ public:
 	inline const SSTHeader *getHeader(void) const {
 		return file_ ? &header_ : nullptr;
 	}
+	inline const util::Data &getWaveform(void) const {
+		return waveform_;
+	}
 	inline int getVariant(void) const {
 		return currentVariant_;
 	}
@@ -104,6 +107,7 @@ public:
 	void close(void);
 	bool read(SSTSector &output, int chunk);
 
+	void resetVariant(void);
 	size_t getKeyName(char *output) const;
 };
 
